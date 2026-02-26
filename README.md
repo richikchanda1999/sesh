@@ -17,9 +17,27 @@ For every feature, every time. `sesh` does all of this in one command.
 
 ## Install
 
+### Homebrew (macOS/Linux)
+
 ```bash
-cargo install --path .
+brew install richikchanda1999/tap/sesh
 ```
+
+### Shell script (macOS/Linux)
+
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/richikchanda1999/sesh/releases/latest/download/sesh-installer.sh | sh
+```
+
+### Cargo (from source)
+
+```bash
+cargo install --git https://github.com/richikchanda1999/sesh.git
+```
+
+### Prebuilt binaries
+
+Download from [GitHub Releases](https://github.com/richikchanda1999/sesh/releases).
 
 ## Quick Start
 
