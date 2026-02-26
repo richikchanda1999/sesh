@@ -1,0 +1,85 @@
+use std::path::PathBuf;
+
+use clap::{Parser, Subcommand};
+
+#[derive(Parser)]
+#[command(name = "sesh", about = "Multi-repo worktree session manager for AI-assisted development")]
+pub struct Cli {
+    /// Path to the parent directory containing repos (defaults to current dir)
+    #[arg(short, long, global = true)]
+    pub dir: Option<PathBuf>,
+
+    #[command(subcommand)]
+    pub command: Command,
+}
+
+#[derive(Subcommand)]
+pub enum Command {
+    /// Create a new worktree session
+    Start {
+        /// Branch name for the session
+        #[arg(short, long)]
+        branch: Option<String>,
+
+        /// Include all discovered repos (skip interactive selection)
+        #[arg(long)]
+        all: bool,
+
+        /// Use a preset from sesh.toml
+        #[arg(long)]
+        preset: Option<String>,
+
+        /// Skip running setup scripts
+        #[arg(long)]
+        no_setup: bool,
+
+        /// Don't open VS Code
+        #[arg(long)]
+        no_vscode: bool,
+    },
+
+    /// List sessions
+    List {
+        /// Show only sessions with existing worktrees
+        #[arg(long)]
+        active: bool,
+    },
+
+    /// Stop and clean up a session
+    Stop {
+        /// Session name (interactive if omitted)
+        name: Option<String>,
+
+        /// Keep branches after removing worktrees
+        #[arg(long)]
+        keep_branches: bool,
+    },
+
+    /// Re-open VS Code windows for a session
+    Resume {
+        /// Session name (interactive if omitted)
+        name: Option<String>,
+    },
+
+    /// Show git status per repo in a session
+    Status {
+        /// Session name (interactive if omitted)
+        name: Option<String>,
+    },
+
+    /// Push branches and create PRs
+    Pr {
+        /// Session name (interactive if omitted)
+        name: Option<String>,
+
+        /// Base branch for PRs
+        #[arg(long, default_value = "main")]
+        base: String,
+    },
+
+    /// Generate sesh.toml interactively
+    Init,
+
+    /// Detect and fix orphaned worktrees/sessions
+    Doctor,
+}
