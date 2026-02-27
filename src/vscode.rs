@@ -3,16 +3,6 @@ use std::process::Command;
 
 use anyhow::Result;
 
-pub fn check_vscode_available() -> bool {
-    Command::new("which")
-        .arg("code")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-}
-
 /// Open VS Code with the appropriate strategy:
 /// - 1 repo: open the single worktree path directly
 /// - 2+ repos: open the session directory so all repos appear as folders in one window

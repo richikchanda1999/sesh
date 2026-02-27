@@ -3,7 +3,6 @@ mod commands;
 mod config;
 mod context;
 mod discovery;
-mod error;
 mod lock;
 mod mcp;
 mod scripts;
