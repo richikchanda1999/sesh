@@ -19,6 +19,7 @@ pub struct SeshConfig {
 pub struct SessionConfig {
     pub base_branch: String,
     pub shared_context: Vec<String>,
+    pub copy: Vec<String>,
 }
 
 impl Default for SessionConfig {
@@ -26,6 +27,7 @@ impl Default for SessionConfig {
         Self {
             base_branch: "main".to_string(),
             shared_context: Vec::new(),
+            copy: Vec::new(),
         }
     }
 }
@@ -59,6 +61,8 @@ pub struct RepoConfig {
     pub symlink: Vec<String>,
     pub skip: bool,
     pub exclusive: bool,
+    pub setup: Option<String>,
+    pub teardown: Option<String>,
 }
 
 impl SeshConfig {

@@ -15,12 +15,37 @@ pub fn run(parent_dir: &Path, name: Option<String>, keep_branches: bool) -> Resu
     let session = pick_session(parent_dir, name)?;
     let session_dir = session::session_dir(parent_dir, &session.name);
 
-    // Run teardown script if configured
+    // Run teardown scripts
     let config_path = parent_dir.join("sesh.toml");
     let config = SeshConfig::load(&config_path)?;
+    let repo_names: Vec<String> = session.repos.iter().map(|r| r.name.clone()).collect();
+
+    // Per-repo teardown scripts (run before global teardown)
+    for repo in &session.repos {
+        if let Some(repo_config) = config.repos.get(&repo.name) {
+            if let Some(ref teardown) = repo_config.teardown {
+                let script_path = parent_dir.join(teardown);
+                if script_path.exists() {
+                    println!("Running teardown for {}...", style(&repo.name).cyan());
+                    if let Err(e) = scripts::run_repo_script(
+                        "teardown",
+                        &script_path,
+                        &repo.worktree_path,
+                        &session.name,
+                        &session.branch,
+                        &repo_names,
+                        &repo.name,
+                    ) {
+                        eprintln!("  Warning: teardown script for {} failed: {}", repo.name, e);
+                    }
+                }
+            }
+        }
+    }
+
+    // Global teardown script
     if let Some(ref teardown) = config.scripts.teardown {
         let script_path = parent_dir.join(teardown);
-        let repo_names: Vec<String> = session.repos.iter().map(|r| r.name.clone()).collect();
         if script_path.exists() {
             println!("Running teardown script...");
             scripts::run_teardown_script(&script_path, &session_dir, &session.branch, &repo_names)

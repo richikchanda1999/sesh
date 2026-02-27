@@ -86,8 +86,10 @@ MyProject/
 │   ├── sessions/
 │   │   └── feature-auth/
 │   │       ├── session.json
+│   │       ├── docker-compose.yml   (copied from parent dir)
 │   │       ├── context/
-│   │       │   └── .sesh-context.md
+│   │       │   ├── .sesh-context.md
+│   │       │   └── ARCHITECTURE.md  (symlinked from parent dir)
 │   │       ├── server/          (git worktree on branch feature/auth)
 │   │       │   ├── .mcp.json
 │   │       │   ├── .env         (copied from original)
@@ -117,6 +119,7 @@ Multiple sessions can coexist. Each is isolated in its own worktree set. With 2+
 [session]
 base_branch = "main"
 shared_context = ["ARCHITECTURE.md"]
+copy = ["docker-compose.yml"]       # files from parent dir copied into session dir
 
 [scripts]
 setup = "./scripts/setup-dev.sh"
@@ -138,10 +141,13 @@ url = "https://mcp.linear.app/mcp"
 copy = [".env", "supabase/functions/.env"]
 symlink = []
 exclusive = true                 # only one session runs services for this repo
+setup = "./scripts/server-setup.sh"
+teardown = "./scripts/server-teardown.sh"
 
 [repos.web-code]
 copy = [".env"]
 symlink = ["node_modules"]
+setup = "./scripts/web-setup.sh"
 
 [repos.admin]
 copy = [".env"]
@@ -162,19 +168,27 @@ all = ["server", "web-code", "admin"]
 | `symlink` | Files/directories to symlink (e.g., `node_modules` to avoid reinstalling) |
 | `skip` | Exclude from default selection in the interactive picker |
 | `exclusive` | Only one session can hold the lock for this repo at a time (see below) |
+| `setup` | Per-repo setup script, run with the worktree as working directory |
+| `teardown` | Per-repo teardown script, run before worktree removal |
 
 ### Scripts
 
-Setup and teardown scripts run with these environment variables:
+There are two levels of scripts:
+
+- **Global** (`[scripts].setup` / `[scripts].teardown`) — run once per session, with the session directory as cwd.
+- **Per-repo** (`[repos.X].setup` / `[repos.X].teardown`) — run once per repo, with the worktree as cwd. Per-repo setup runs after the global setup; per-repo teardown runs before the global teardown.
+
+All scripts receive these environment variables:
 
 | Variable | Value |
 |----------|-------|
 | `SESH_SESSION` | Session name |
 | `SESH_BRANCH` | Branch name |
-| `SESH_REPOS` | Comma-separated list of repo names |
-| `SESH_EXCLUSIVE_SKIP` | Comma-separated repos whose exclusive lock is held by another session (setup only) |
+| `SESH_REPOS` | Comma-separated list of all repo names in the session |
+| `SESH_REPO` | Current repo name (per-repo scripts only) |
+| `SESH_EXCLUSIVE_SKIP` | Comma-separated repos whose exclusive lock is held by another session (global setup only) |
 
-Scripts run with the session directory as their working directory and inherit the terminal for interactive prompts.
+Scripts inherit the terminal for interactive prompts.
 
 ### Exclusive Locks
 

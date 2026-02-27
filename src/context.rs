@@ -24,37 +24,21 @@ pub fn generate_context(
     std::fs::write(&context_file, &content)
         .with_context(|| format!("failed to write {}", context_file.display()))?;
 
-    // Symlink .sesh-context.md into each worktree root
-    for (_name, worktree_path) in repos {
-        let link = worktree_path.join(".sesh-context.md");
-        if !link.exists() {
-            symlink(&context_file, &link).with_context(|| {
-                format!(
-                    "failed to symlink {} -> {}",
-                    link.display(),
-                    context_file.display()
-                )
-            })?;
-        }
-    }
-
-    // Symlink shared context files into each worktree root
+    // Symlink shared context files into the session context/ directory (not into worktrees)
     for filename in shared_context_files {
         let source = parent_dir.join(filename);
         if !source.exists() {
             continue;
         }
-        for (_name, worktree_path) in repos {
-            let link = worktree_path.join(filename);
-            if !link.exists() {
-                symlink(&source, &link).with_context(|| {
-                    format!(
-                        "failed to symlink {} -> {}",
-                        link.display(),
-                        source.display()
-                    )
-                })?;
-            }
+        let link = context_dir.join(filename);
+        if !link.exists() {
+            symlink(&source, &link).with_context(|| {
+                format!(
+                    "failed to symlink {} -> {}",
+                    link.display(),
+                    source.display()
+                )
+            })?;
         }
     }
 

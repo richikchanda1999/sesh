@@ -213,7 +213,41 @@ pub fn run(
     )?;
     println!("  {} Session context generated", style("✓").green());
 
-    // 9. Acquire exclusive locks
+    // 9. Copy parent-dir files into session directory
+    if !config.session.copy.is_empty() {
+        for file in &config.session.copy {
+            let src = parent_dir.join(file);
+            let dst = sess_dir.join(file);
+            if src.exists() {
+                if let Some(parent) = dst.parent() {
+                    std::fs::create_dir_all(parent).ok();
+                }
+                if src.is_dir() {
+                    if let Err(e) = copy_dir_recursive(&src, &dst) {
+                        eprintln!(
+                            "  {} Failed to copy dir {} to session: {}",
+                            style("!").yellow(),
+                            file,
+                            e
+                        );
+                    } else {
+                        println!("  {} Copied {} → session", style("·").dim(), file);
+                    }
+                } else if let Err(e) = std::fs::copy(&src, &dst) {
+                    eprintln!(
+                        "  {} Failed to copy {} to session: {}",
+                        style("!").yellow(),
+                        file,
+                        e
+                    );
+                } else {
+                    println!("  {} Copied {} → session", style("·").dim(), file);
+                }
+            }
+        }
+    }
+
+    // 10. Acquire exclusive locks
     let mut exclusive_skipped: Vec<String> = Vec::new();
     for repo in &selected_repos {
         let is_exclusive = config
@@ -254,11 +288,13 @@ pub fn run(
         }
     }
 
-    // 10. Run setup script
+    // 11. Run setup scripts
     if !no_setup {
+        let repo_names: Vec<String> = selected_repos.iter().map(|r| r.name.clone()).collect();
+
+        // Global setup script
         if let Some(ref setup_script) = config.scripts.setup {
             let script_path = parent_dir.join(setup_script);
-            let repo_names: Vec<String> = selected_repos.iter().map(|r| r.name.clone()).collect();
             println!("\n  {} Running setup script...", style("→").cyan());
             scripts::run_setup_script_with_env(
                 &script_path,
@@ -268,9 +304,29 @@ pub fn run(
                 &exclusive_skipped,
             )?;
         }
+
+        // Per-repo setup scripts
+        for repo in &selected_repos {
+            if let Some(repo_config) = config.repos.get(&repo.name) {
+                if let Some(ref setup) = repo_config.setup {
+                    let script_path = parent_dir.join(setup);
+                    let worktree_path = sess_dir.join(&repo.name);
+                    println!("  {} Running setup for {}...", style("→").cyan(), repo.name);
+                    scripts::run_repo_script(
+                        "setup",
+                        &script_path,
+                        &worktree_path,
+                        &session_name,
+                        &branch_name,
+                        &repo_names,
+                        &repo.name,
+                    )?;
+                }
+            }
+        }
     }
 
-    // 11. Save session
+    // 12. Save session
     let session_info = SessionInfo {
         name: session_name.clone(),
         branch: branch_name.clone(),
@@ -288,7 +344,7 @@ pub fn run(
 
     session::save_session(&sess_dir, &session_info)?;
 
-    // 12. Open VS Code
+    // 13. Open VS Code
     if !no_vscode {
         let paths: Vec<PathBuf> = selected_repos
             .iter()
@@ -297,7 +353,7 @@ pub fn run(
         vscode::open_session_in_vscode(&sess_dir, &paths)?;
     }
 
-    // 13. Summary
+    // 14. Summary
     println!("\n{}", style("Session created successfully!").green().bold());
     println!();
     println!(
@@ -384,4 +440,19 @@ fn rollback_worktrees(created: &[(PathBuf, PathBuf)]) {
             eprintln!("    Failed to remove worktree {}: {}", worktree_path.display(), e);
         }
     }
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if src_path.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path)?;
+        } else {
+            std::fs::copy(&src_path, &dst_path)?;
+        }
+    }
+    Ok(())
 }
