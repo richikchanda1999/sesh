@@ -82,4 +82,10 @@ pub enum Command {
 
     /// Detect and fix orphaned worktrees/sessions
     Doctor,
+
+    /// Transfer exclusive locks to a session (runs teardown/setup scripts)
+    Activate {
+        /// Session name (interactive if omitted)
+        name: Option<String>,
+    },
 }

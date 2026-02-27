@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use console::style;
 
 use crate::config::SeshConfig;
+use crate::lock;
 use crate::scripts;
 use crate::session;
 use crate::worktree;
@@ -43,6 +44,24 @@ pub fn run(parent_dir: &Path, name: Option<String>, keep_branches: bool) -> Resu
         for repo in &session.repos {
             if let Err(e) = worktree::delete_branch(&repo.original_repo_path, &session.branch) {
                 eprintln!("  Warning: failed to delete branch '{}' in {}: {}", session.branch, repo.name, e);
+            }
+        }
+    }
+
+    // Release exclusive locks held by this session
+    for repo in &session.repos {
+        let is_exclusive = config
+            .repos
+            .get(&repo.name)
+            .map(|rc| rc.exclusive)
+            .unwrap_or(false);
+        if is_exclusive {
+            if let Ok(Some(lock_info)) = lock::check_lock(parent_dir, &repo.name) {
+                if lock_info.session == session.name {
+                    if let Err(e) = lock::release_lock(parent_dir, &repo.name) {
+                        eprintln!("  Warning: failed to release lock for {}: {}", repo.name, e);
+                    }
+                }
             }
         }
     }

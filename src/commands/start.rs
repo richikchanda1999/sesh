@@ -8,6 +8,7 @@ use dialoguer::{Input, MultiSelect};
 use crate::config::SeshConfig;
 use crate::context;
 use crate::discovery;
+use crate::lock;
 use crate::mcp;
 use crate::scripts;
 use crate::session::{self, SessionInfo, SessionRepo};
@@ -59,17 +60,23 @@ pub fn run(
     worktree::validate_branch_name(&branch_name)
         .with_context(|| format!("'{}' is not a valid git branch name", branch_name))?;
 
-    // Check session doesn't already exist
-    if session::session_exists(parent_dir, &branch_name) {
-        bail!("session '{}' already exists. Use `sesh stop {}` first or choose a different name.", branch_name, branch_name);
+    // Check if any existing session already uses this branch
+    if let Some(existing) = session::find_session_by_branch(parent_dir, &branch_name) {
+        bail!(
+            "session '{}' already uses branch '{}'. Use `sesh stop {}` first or choose a different branch.",
+            existing.name, branch_name, existing.name
+        );
     }
 
-    let sess_dir = session::session_dir(parent_dir, &branch_name);
+    // Sanitize branch name into a flat folder name
+    let session_name = session::sanitize_session_name(&branch_name, parent_dir);
+    let sess_dir = session::session_dir(parent_dir, &session_name);
 
     println!(
-        "\n{} Creating session {} with {} repo(s)...\n",
+        "\n{} Creating session {} (branch: {}) with {} repo(s)...\n",
         style("→").cyan().bold(),
-        style(&branch_name).green().bold(),
+        style(&session_name).green().bold(),
+        style(&branch_name).cyan(),
         selected_repos.len()
     );
 
@@ -206,19 +213,66 @@ pub fn run(
     )?;
     println!("  {} Session context generated", style("✓").green());
 
-    // 9. Run setup script
+    // 9. Acquire exclusive locks
+    let mut exclusive_skipped: Vec<String> = Vec::new();
+    for repo in &selected_repos {
+        let is_exclusive = config
+            .repos
+            .get(&repo.name)
+            .map(|rc| rc.exclusive)
+            .unwrap_or(false);
+        if !is_exclusive {
+            continue;
+        }
+
+        match lock::check_lock(parent_dir, &repo.name)? {
+            None => {
+                lock::acquire_lock(parent_dir, &repo.name, &session_name)?;
+                println!("  {} Exclusive lock acquired: {}", style("✓").green(), repo.name);
+            }
+            Some(lock_info) => {
+                // Check if the holding session still exists
+                if session::session_exists(parent_dir, &lock_info.session) {
+                    println!(
+                        "  {} Exclusive repo '{}' is locked by session '{}' — skipping services",
+                        style("!").yellow(),
+                        repo.name,
+                        lock_info.session
+                    );
+                    exclusive_skipped.push(repo.name.clone());
+                } else {
+                    // Stale lock — reclaim
+                    lock::acquire_lock(parent_dir, &repo.name, &session_name)?;
+                    println!(
+                        "  {} Stale lock for '{}' reclaimed (session '{}' gone)",
+                        style("✓").green(),
+                        repo.name,
+                        lock_info.session
+                    );
+                }
+            }
+        }
+    }
+
+    // 10. Run setup script
     if !no_setup {
         if let Some(ref setup_script) = config.scripts.setup {
             let script_path = parent_dir.join(setup_script);
             let repo_names: Vec<String> = selected_repos.iter().map(|r| r.name.clone()).collect();
             println!("\n  {} Running setup script...", style("→").cyan());
-            scripts::run_setup_script(&script_path, &sess_dir, &branch_name, &repo_names)?;
+            scripts::run_setup_script_with_env(
+                &script_path,
+                &sess_dir,
+                &branch_name,
+                &repo_names,
+                &exclusive_skipped,
+            )?;
         }
     }
 
-    // 10. Save session
+    // 11. Save session
     let session_info = SessionInfo {
-        name: branch_name.clone(),
+        name: session_name.clone(),
         branch: branch_name.clone(),
         repos: selected_repos
             .iter()
@@ -234,21 +288,26 @@ pub fn run(
 
     session::save_session(&sess_dir, &session_info)?;
 
-    // 11. Open VS Code
+    // 12. Open VS Code
     if !no_vscode {
         let paths: Vec<PathBuf> = selected_repos
             .iter()
             .map(|r| sess_dir.join(&r.name))
             .collect();
-        vscode::open_in_vscode(&paths)?;
+        vscode::open_session_in_vscode(&sess_dir, &paths)?;
     }
 
-    // 12. Summary
+    // 13. Summary
     println!("\n{}", style("Session created successfully!").green().bold());
     println!();
     println!(
         "  {:<16} {}",
         style("Session:").bold(),
+        session_name
+    );
+    println!(
+        "  {:<16} {}",
+        style("Branch:").bold(),
         branch_name
     );
     println!(

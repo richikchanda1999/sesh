@@ -58,6 +58,7 @@ pub struct RepoConfig {
     pub copy: Vec<String>,
     pub symlink: Vec<String>,
     pub skip: bool,
+    pub exclusive: bool,
 }
 
 impl SeshConfig {

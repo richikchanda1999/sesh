@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -82,4 +83,51 @@ pub fn session_exists(parent_dir: &Path, session_name: &str) -> bool {
     session_dir(parent_dir, session_name)
         .join("session.json")
         .exists()
+}
+
+/// Sanitize a branch name into a flat folder name suitable for use as a session directory.
+/// Replaces `/` with `-`, strips leading `.` and `..`, and appends `-2`, `-3`, etc. on collision.
+pub fn sanitize_session_name(branch: &str, parent_dir: &Path) -> String {
+    let mut name = branch.replace('/', "-");
+
+    // Strip leading dots
+    name = name.trim_start_matches('.').to_string();
+
+    // If stripping left us empty, use a fallback
+    if name.is_empty() {
+        name = "session".to_string();
+    }
+
+    // Collect existing session folder names to detect collisions
+    let sessions_dir = parent_dir.join(".sesh/sessions");
+    let mut existing: HashSet<String> = HashSet::new();
+    if let Ok(entries) = fs::read_dir(&sessions_dir) {
+        for entry in entries.flatten() {
+            if entry.path().is_dir() {
+                if let Some(dir_name) = entry.file_name().to_str() {
+                    existing.insert(dir_name.to_string());
+                }
+            }
+        }
+    }
+
+    if !existing.contains(&name) {
+        return name;
+    }
+
+    // Collision: append -2, -3, etc.
+    let mut counter = 2;
+    loop {
+        let candidate = format!("{}-{}", name, counter);
+        if !existing.contains(&candidate) {
+            return candidate;
+        }
+        counter += 1;
+    }
+}
+
+/// Check if any existing session already uses the given branch name.
+pub fn find_session_by_branch(parent_dir: &Path, branch: &str) -> Option<SessionInfo> {
+    let sessions = list_sessions(parent_dir).ok()?;
+    sessions.into_iter().find(|s| s.branch == branch)
 }

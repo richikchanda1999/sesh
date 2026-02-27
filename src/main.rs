@@ -4,6 +4,7 @@ mod config;
 mod context;
 mod discovery;
 mod error;
+mod lock;
 mod mcp;
 mod scripts;
 mod session;
@@ -32,5 +33,6 @@ fn main() -> Result<()> {
         Command::Pr { name, base } => commands::pr::run(&parent_dir, name, base),
         Command::Init => commands::init::run(&parent_dir),
         Command::Doctor => commands::doctor::run(&parent_dir),
+        Command::Activate { name } => commands::activate::run(&parent_dir, name),
     }
 }

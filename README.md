@@ -56,12 +56,13 @@ sesh stop                     # tear down a session
 |---------|-------------|
 | `sesh start [-b branch] [--all] [--preset name]` | Create a new worktree session |
 | `sesh list [--active]` | List sessions |
-| `sesh stop [name] [--keep-branches]` | Tear down session and clean up worktrees |
-| `sesh resume [name]` | Re-open VS Code windows for a session |
+| `sesh stop [name] [--keep-branches]` | Tear down session, clean up worktrees, and release locks |
+| `sesh resume [name]` | Re-open VS Code for a session |
+| `sesh activate [name]` | Transfer exclusive locks to a session (runs teardown/setup) |
 | `sesh status [name]` | Show git status per repo in a session |
 | `sesh pr [name] [--base main]` | Push branches and create GitHub PRs |
 | `sesh init` | Generate `sesh.toml` interactively |
-| `sesh doctor` | Detect and fix orphaned worktrees/sessions |
+| `sesh doctor` | Detect and fix orphaned worktrees, sessions, and stale locks |
 
 All commands accept `-d <DIR>` to specify the parent directory (defaults to cwd).
 
@@ -77,32 +78,36 @@ MyProject/
 └── sesh.toml
 ```
 
-Running `sesh start -b my-feature` creates:
+Running `sesh start -b feature/auth` creates:
 
 ```
 MyProject/
 ├── .sesh/
-│   └── sessions/
-│       └── my-feature/
-│           ├── session.json
-│           ├── context/
-│           │   └── .sesh-context.md
-│           ├── server/          (git worktree on branch my-feature)
-│           │   ├── .mcp.json
-│           │   ├── .env         (copied from original)
-│           │   └── ...
-│           └── web-code/        (git worktree on branch my-feature)
-│               ├── .mcp.json
-│               ├── .env
-│               ├── node_modules (symlinked from original)
-│               └── ...
+│   ├── sessions/
+│   │   └── feature-auth/
+│   │       ├── session.json
+│   │       ├── context/
+│   │       │   └── .sesh-context.md
+│   │       ├── server/          (git worktree on branch feature/auth)
+│   │       │   ├── .mcp.json
+│   │       │   ├── .env         (copied from original)
+│   │       │   └── ...
+│   │       └── web-code/        (git worktree on branch feature/auth)
+│   │           ├── .mcp.json
+│   │           ├── .env
+│   │           ├── node_modules (symlinked from original)
+│   │           └── ...
+│   └── locks/
+│       └── server.lock          (exclusive lock, if configured)
 ├── server/
 ├── web-code/
 ├── admin/
 └── sesh.toml
 ```
 
-Multiple sessions can coexist. Each is isolated in its own worktree set.
+Branch names with `/` are sanitized into flat folder names (`feature/auth` → `feature-auth`). If a folder name collides with an existing session, `-2`, `-3`, etc. are appended. The real branch name is preserved for all git operations.
+
+Multiple sessions can coexist. Each is isolated in its own worktree set. With 2+ repos, VS Code opens the session folder in a single window; with 1 repo it opens just that worktree.
 
 ## Configuration
 
@@ -132,6 +137,7 @@ url = "https://mcp.linear.app/mcp"
 [repos.server]
 copy = [".env", "supabase/functions/.env"]
 symlink = []
+exclusive = true                 # only one session runs services for this repo
 
 [repos.web-code]
 copy = [".env"]
@@ -155,6 +161,7 @@ all = ["server", "web-code", "admin"]
 | `copy` | Files to copy from the original repo into the worktree |
 | `symlink` | Files/directories to symlink (e.g., `node_modules` to avoid reinstalling) |
 | `skip` | Exclude from default selection in the interactive picker |
+| `exclusive` | Only one session can hold the lock for this repo at a time (see below) |
 
 ### Scripts
 
@@ -165,8 +172,18 @@ Setup and teardown scripts run with these environment variables:
 | `SESH_SESSION` | Session name |
 | `SESH_BRANCH` | Branch name |
 | `SESH_REPOS` | Comma-separated list of repo names |
+| `SESH_EXCLUSIVE_SKIP` | Comma-separated repos whose exclusive lock is held by another session (setup only) |
 
 Scripts run with the session directory as their working directory and inherit the terminal for interactive prompts.
+
+### Exclusive Locks
+
+Repos with `exclusive = true` use a file-based lock so only one session runs their services (dev servers, etc.) at a time. Locks are stored at `.sesh/locks/<repo>.lock`.
+
+- **`sesh start`** — acquires the lock if free or stale; if another active session holds it, the repo is added to `SESH_EXCLUSIVE_SKIP` so your setup script can skip starting its services.
+- **`sesh stop`** — releases locks held by the session being stopped.
+- **`sesh activate [name]`** — transfers locks to a different session, running teardown for the previous holder and setup for the new one. Useful for switching which session is "live" without recreating worktrees.
+- **`sesh doctor`** — detects and cleans up stale locks.
 
 ## Prerequisites
 

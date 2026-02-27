@@ -5,6 +5,7 @@ use console::style;
 use dialoguer::Confirm;
 
 use crate::discovery;
+use crate::lock;
 use crate::session;
 use crate::worktree;
 
@@ -69,6 +70,20 @@ pub fn run(parent_dir: &Path) -> Result<()> {
         }
     }
 
+    // Check for stale locks (pointing to sessions that no longer exist)
+    let mut stale_locks = Vec::new();
+    if let Ok(locks) = lock::list_locks(parent_dir) {
+        for (repo_name, lock_info) in &locks {
+            if !session::session_exists(parent_dir, &lock_info.session) {
+                issues.push(format!(
+                    "Stale lock for repo '{}' (session '{}' no longer exists)",
+                    repo_name, lock_info.session
+                ));
+                stale_locks.push(repo_name.clone());
+            }
+        }
+    }
+
     if issues.is_empty() {
         println!("\n  {} No issues found. Everything looks good!", style("✔").green());
         return Ok(());
@@ -108,6 +123,15 @@ pub fn run(parent_dir: &Path) -> Result<()> {
                     }
                 }
             }
+        }
+    }
+
+    // Fix: remove stale locks
+    for repo_name in &stale_locks {
+        if let Err(e) = lock::release_lock(parent_dir, repo_name) {
+            eprintln!("  Warning: failed to remove stale lock for {}: {}", repo_name, e);
+        } else {
+            println!("  Removed stale lock: {}", repo_name);
         }
     }
 
