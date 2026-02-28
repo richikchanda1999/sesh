@@ -102,6 +102,12 @@ pub enum Command {
         #[command(subcommand)]
         provider: AuthProvider,
     },
+
+    /// Generate shell completions
+    Completions {
+        /// Shell to generate completions for
+        shell: clap_complete::Shell,
+    },
 }
 
 #[derive(Subcommand)]

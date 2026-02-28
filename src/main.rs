@@ -35,6 +35,10 @@ async fn main() -> Result<()> {
         Command::Init => commands::init::run(&parent_dir),
         Command::Doctor => commands::doctor::run(&parent_dir),
         Command::Activate { name } => commands::activate::run(&parent_dir, name),
+        Command::Completions { shell } => {
+            commands::completions::run(shell);
+            Ok(())
+        }
         Command::Auth { provider } => {
             let provider_name = match provider {
                 cli::AuthProvider::Linear => "linear",

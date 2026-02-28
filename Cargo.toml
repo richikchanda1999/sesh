@@ -20,6 +20,7 @@ anyhow = "1"
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 reqwest = { version = "0.12", features = ["rustls-tls", "json"], default-features = false }
+clap_complete = "4"
 
 # The profile that 'dist' will build with
 [profile.dist]
