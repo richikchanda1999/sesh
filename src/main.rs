@@ -3,6 +3,7 @@ mod commands;
 mod config;
 mod context;
 mod discovery;
+mod integrations;
 mod lock;
 mod mcp;
 mod scripts;
@@ -17,13 +18,14 @@ use clap::Parser;
 
 use cli::{Cli, Command};
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let cli = Cli::parse();
     let parent_dir = cli.dir.unwrap_or_else(|| env::current_dir().expect("cannot determine current directory"));
 
     match cli.command {
         Command::Start { branch, all, preset, no_setup, no_vscode } => {
-            commands::start::run(&parent_dir, branch, all, preset, no_setup, no_vscode)
+            commands::start::run(&parent_dir, branch, all, preset, no_setup, no_vscode).await
         }
         Command::List { active } => commands::list::run(&parent_dir, active),
         Command::Stop { name, keep_branches } => commands::stop::run(&parent_dir, name, keep_branches),
@@ -33,5 +35,12 @@ fn main() -> Result<()> {
         Command::Init => commands::init::run(&parent_dir),
         Command::Doctor => commands::doctor::run(&parent_dir),
         Command::Activate { name } => commands::activate::run(&parent_dir, name),
+        Command::Auth { provider } => {
+            let provider_name = match provider {
+                cli::AuthProvider::Linear => "linear",
+                cli::AuthProvider::Sentry => "sentry",
+            };
+            commands::auth::run(&parent_dir, provider_name)
+        }
     }
 }
