@@ -12,6 +12,12 @@ pub struct SeshConfig {
     pub mcp: McpConfig,
     pub repos: HashMap<String, RepoConfig>,
     pub presets: HashMap<String, Vec<String>>,
+    pub sentry: Option<SentryConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SentryConfig {
+    pub org: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
