@@ -106,7 +106,25 @@ pub async fn run(
         println!("  {} Worktree created: {}", style("✓").green(), repo.name);
     }
 
-    // 6. Copy/symlink per-repo files
+    // 6. Save session early so `sesh stop` can always find it for cleanup
+    let session_info = SessionInfo {
+        name: session_name.clone(),
+        branch: branch_name.clone(),
+        repos: selected_repos
+            .iter()
+            .map(|r| SessionRepo {
+                name: r.name.clone(),
+                worktree_path: sess_dir.join(&r.name),
+                original_repo_path: r.path.clone(),
+            })
+            .collect(),
+        created_at: Utc::now(),
+        parent_dir: parent_dir.to_path_buf(),
+    };
+
+    session::save_session(&sess_dir, &session_info)?;
+
+    // 7. Copy/symlink per-repo files
     for repo in &selected_repos {
         if let Some(repo_config) = config.repos.get(&repo.name) {
             let worktree_path = sess_dir.join(&repo.name);
@@ -292,24 +310,6 @@ pub async fn run(
             }
         }
     }
-
-    // 12. Save session
-    let session_info = SessionInfo {
-        name: session_name.clone(),
-        branch: branch_name.clone(),
-        repos: selected_repos
-            .iter()
-            .map(|r| SessionRepo {
-                name: r.name.clone(),
-                worktree_path: sess_dir.join(&r.name),
-                original_repo_path: r.path.clone(),
-            })
-            .collect(),
-        created_at: Utc::now(),
-        parent_dir: parent_dir.to_path_buf(),
-    };
-
-    session::save_session(&sess_dir, &session_info)?;
 
     // 13. Open VS Code
     if !no_vscode {
