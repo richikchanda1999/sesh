@@ -54,7 +54,7 @@ sesh stop                     # tear down a session
 
 | Command | Description |
 |---------|-------------|
-| `sesh start [-b branch] [--all] [--preset name] [--linear]` | Create a new worktree session (accepts Linear/Sentry inputs) |
+| `sesh start [-b branch] [--from ref] [--all] [--preset name] [--linear]` | Create a new worktree session (accepts Linear/Sentry inputs) |
 | `sesh list [--active]` | List sessions |
 | `sesh stop [name] [--keep-branches]` | Tear down session, clean up worktrees, and release locks |
 | `sesh resume [name]` | Re-open VS Code for a session |
@@ -80,7 +80,9 @@ MyProject/
 └── sesh.toml
 ```
 
-Running `sesh start -b feature/auth` creates:
+Running `sesh start -b feature/auth` creates worktrees from the configured base branch (default: `main`). Use `--from` to override the base branch for a single session without editing `sesh.toml` (e.g., `sesh start -b feature/auth --from develop`).
+
+Example output:
 
 ```
 MyProject/
