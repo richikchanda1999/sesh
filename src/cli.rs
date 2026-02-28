@@ -36,6 +36,10 @@ pub enum Command {
         /// Don't open VS Code
         #[arg(long)]
         no_vscode: bool,
+
+        /// Pick a branch from your Linear tickets
+        #[arg(long)]
+        linear: bool,
     },
 
     /// List sessions
