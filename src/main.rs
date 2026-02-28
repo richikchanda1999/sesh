@@ -35,6 +35,12 @@ async fn main() -> Result<()> {
         Command::Init => commands::init::run(&parent_dir),
         Command::Doctor => commands::doctor::run(&parent_dir),
         Command::Activate { name } => commands::activate::run(&parent_dir, name),
+        Command::Log { session, script, follow } => {
+            commands::log::run(&parent_dir, session, script, follow)
+        }
+        Command::Exec { session, command } => {
+            commands::exec::run(&parent_dir, session, &command)
+        }
         Command::Completions { shell } => {
             commands::completions::run(shell);
             Ok(())

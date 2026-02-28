@@ -103,6 +103,30 @@ pub enum Command {
         provider: AuthProvider,
     },
 
+    /// View background script logs
+    Log {
+        /// Session name (interactive if omitted)
+        #[arg(short, long)]
+        session: Option<String>,
+
+        /// Script label to view (lists available if omitted)
+        script: Option<String>,
+
+        /// Follow the log output (like tail -f)
+        #[arg(short, long)]
+        follow: bool,
+    },
+
+    /// Run a command in each repo's worktree
+    Exec {
+        /// Session name (interactive if omitted)
+        #[arg(short, long)]
+        session: Option<String>,
+
+        /// Command to execute in each repo's worktree
+        command: String,
+    },
+
     /// Generate shell completions
     Completions {
         /// Shell to generate completions for
