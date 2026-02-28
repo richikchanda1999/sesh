@@ -54,7 +54,7 @@ sesh stop                     # tear down a session
 
 | Command | Description |
 |---------|-------------|
-| `sesh start [-b branch] [--all] [--preset name]` | Create a new worktree session (accepts Linear/Sentry inputs) |
+| `sesh start [-b branch] [--all] [--preset name] [--linear]` | Create a new worktree session (accepts Linear/Sentry inputs) |
 | `sesh list [--active]` | List sessions |
 | `sesh stop [name] [--keep-branches]` | Tear down session, clean up worktrees, and release locks |
 | `sesh resume [name]` | Re-open VS Code for a session |
@@ -120,6 +120,7 @@ Multiple sessions can coexist. Each is isolated in its own worktree set. With 2+
 ```toml
 [session]
 base_branch = "main"
+branch_prefix = "richik/"           # auto-prefix all branch names (e.g. richik/eng-123-fix-bug)
 shared_context = ["ARCHITECTURE.md"]
 copy = ["docker-compose.yml"]       # files from parent dir copied into session dir
 
@@ -205,6 +206,8 @@ Repos with `exclusive = true` use a file-based lock so only one session runs the
 
 `sesh start` auto-detects if your branch input is a Linear ticket or Sentry issue, fetches the title via API, and generates a branch name from it.
 
+Use `sesh start --linear` to browse your assigned Linear tickets in a fuzzy-select picker. Tickets are grouped by status (In Progress → Todo → Backlog), with state and label names rendered in their Linear-configured colors.
+
 ### Setup
 
 ```bash
@@ -223,12 +226,13 @@ org = "your-org-slug"
 
 | Input | Example | Generated branch |
 |-------|---------|-----------------|
+| `--linear` flag | _(fuzzy-select picker)_ | `eng-123-fix-login-bug` |
 | Linear URL | `https://linear.app/team/issue/ENG-123/fix-login` | `eng-123-fix-login-bug` |
 | Linear ID | `ENG-123` | `eng-123-fix-login-bug` |
 | Sentry URL | `https://myorg.sentry.io/issues/12345/` | `sentry-12345-null-pointer-in-handler` |
 | Plain text | `feature/auth` | `feature/auth` (unchanged) |
 
-Branch names are slugified (lowercased, non-alphanumeric → hyphens, collapsed, max 60 chars).
+Branch names are slugified (lowercased, non-alphanumeric → hyphens, collapsed, max 60 chars). If `branch_prefix` is configured, it's automatically prepended (e.g. `richik/eng-123-fix-login-bug`).
 
 **Note:** If a branch already exists in any selected repo, `sesh start` will reject it and re-prompt (interactive) or error (with `-b` flag).
 
