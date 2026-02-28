@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
 use console::style;
-use dialoguer::{Input, MultiSelect};
+use dialoguer::{FuzzySelect, Input, MultiSelect};
 
 use crate::config::SeshConfig;
 use crate::context;
@@ -23,6 +23,7 @@ pub async fn run(
     preset: Option<String>,
     no_setup: bool,
     no_vscode: bool,
+    linear: bool,
 ) -> Result<()> {
     // 1. Load config
     let config_path = parent_dir.join("sesh.toml");
@@ -58,6 +59,7 @@ pub async fn run(
         parent_dir,
         &selected_repos,
         &config,
+        linear,
     )
     .await?;
 
@@ -403,8 +405,52 @@ async fn resolve_branch_name(
     parent_dir: &Path,
     selected_repos: &[discovery::RepoInfo],
     config: &SeshConfig,
+    linear: bool,
 ) -> Result<String> {
-    let is_interactive = flag_branch.is_none();
+    let is_interactive = flag_branch.is_none() && !linear;
+
+    // --linear: pick from assigned tickets (re-prompt on conflict)
+    if linear {
+        println!("  {} Fetching Linear tickets...", style("↓").dim());
+        let issues = integrations::list_linear_issues(parent_dir).await?;
+        if issues.is_empty() {
+            bail!("no assigned Linear issues found");
+        }
+
+        loop {
+            let candidate = pick_linear_ticket(&issues)?;
+            let resolved = apply_prefix(config, &candidate);
+
+            if let Err(e) = worktree::validate_branch_name(&resolved) {
+                println!(
+                    "  {} '{}' is not a valid git branch name: {}",
+                    style("✗").red(), resolved, e
+                );
+                continue;
+            }
+            if let Some(existing) = session::find_session_by_branch(parent_dir, &resolved) {
+                println!(
+                    "  {} Session '{}' already uses branch '{}'. Pick a different ticket.",
+                    style("✗").red(), existing.name, resolved
+                );
+                continue;
+            }
+            let mut conflicts = Vec::new();
+            for repo in selected_repos {
+                if worktree::branch_exists(&repo.path, &resolved)? {
+                    conflicts.push(repo.name.clone());
+                }
+            }
+            if !conflicts.is_empty() {
+                println!(
+                    "  {} Branch '{}' already exists in: {}. Pick a different ticket.",
+                    style("✗").red(), resolved, conflicts.join(", ")
+                );
+                continue;
+            }
+            return Ok(resolved);
+        }
+    }
 
     loop {
         // 1. Get candidate
@@ -417,10 +463,7 @@ async fn resolve_branch_name(
         let resolved = integrations::resolve_branch_input(&candidate, config, parent_dir).await?;
 
         // 3. Apply branch prefix
-        let branch_name = match &config.session.branch_prefix {
-            Some(prefix) if !resolved.starts_with(prefix) => format!("{}{}", prefix, resolved),
-            _ => resolved,
-        };
+        let branch_name = apply_prefix(config, &resolved);
 
         // 4. Validate git branch name
         if let Err(e) = worktree::validate_branch_name(&branch_name) {
@@ -479,6 +522,43 @@ async fn resolve_branch_name(
         }
 
         return Ok(branch_name);
+    }
+}
+
+fn pick_linear_ticket(issues: &[integrations::LinearIssueSummary]) -> Result<String> {
+    let labels: Vec<String> = issues
+        .iter()
+        .map(|i| {
+            let state_colored = integrations::color_text(
+                &i.state_name,
+                i.state_color.as_deref(),
+            );
+            let label_str = if i.labels.is_empty() {
+                String::new()
+            } else {
+                let colored_labels: Vec<String> = i.labels.iter()
+                    .map(|l| integrations::color_text(&l.name, l.color.as_deref()))
+                    .collect();
+                format!(" [{}]", colored_labels.join(", "))
+            };
+            format!("{} {} — {}{}", i.identifier, state_colored, i.title, label_str)
+        })
+        .collect();
+
+    let selection = FuzzySelect::new()
+        .with_prompt("Select a Linear ticket")
+        .items(&labels)
+        .default(0)
+        .interact()
+        .context("ticket selection cancelled")?;
+
+    Ok(integrations::branch_name_from_linear_issue(&issues[selection]))
+}
+
+fn apply_prefix(config: &SeshConfig, branch: &str) -> String {
+    match &config.session.branch_prefix {
+        Some(prefix) if !branch.starts_with(prefix.as_str()) => format!("{}{}", prefix, branch),
+        _ => branch.to_string(),
     }
 }
 
