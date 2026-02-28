@@ -21,6 +21,10 @@ pub enum Command {
         #[arg(short, long)]
         branch: Option<String>,
 
+        /// Base branch to create worktrees from (overrides sesh.toml for this session)
+        #[arg(long)]
+        from: Option<String>,
+
         /// Include all discovered repos (skip interactive selection)
         #[arg(long)]
         all: bool,

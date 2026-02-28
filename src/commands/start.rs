@@ -19,6 +19,7 @@ use crate::worktree;
 pub async fn run(
     parent_dir: &Path,
     branch: Option<String>,
+    from: Option<String>,
     all: bool,
     preset: Option<String>,
     no_setup: bool,
@@ -80,8 +81,8 @@ pub async fn run(
 
     for repo in &selected_repos {
         let repo_config = config.repos.get(&repo.name);
-        let base_branch = repo_config
-            .and_then(|rc| rc.base_branch.as_deref())
+        let base_branch = from.as_deref()
+            .or_else(|| repo_config.and_then(|rc| rc.base_branch.as_deref()))
             .unwrap_or(&config.session.base_branch);
 
         let worktree_path = sess_dir.join(&repo.name);

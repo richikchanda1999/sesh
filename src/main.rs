@@ -24,8 +24,8 @@ async fn main() -> Result<()> {
     let parent_dir = cli.dir.unwrap_or_else(|| env::current_dir().expect("cannot determine current directory"));
 
     match cli.command {
-        Command::Start { branch, all, preset, no_setup, no_vscode, linear } => {
-            commands::start::run(&parent_dir, branch, all, preset, no_setup, no_vscode, linear).await
+        Command::Start { branch, from, all, preset, no_setup, no_vscode, linear } => {
+            commands::start::run(&parent_dir, branch, from, all, preset, no_setup, no_vscode, linear).await
         }
         Command::List { active } => commands::list::run(&parent_dir, active),
         Command::Stop { name, keep_branches } => commands::stop::run(&parent_dir, name, keep_branches),
