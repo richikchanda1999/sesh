@@ -1,6 +1,6 @@
 [package]
 name = "sesh"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 description = "Multi-repo worktree session manager for AI-assisted development"
 repository = "https://github.com/richikchanda1999/sesh"
