@@ -88,4 +88,18 @@ pub enum Command {
         /// Session name (interactive if omitted)
         name: Option<String>,
     },
+
+    /// Configure API tokens for integrations (Linear, Sentry)
+    Auth {
+        #[command(subcommand)]
+        provider: AuthProvider,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum AuthProvider {
+    /// Set your Linear API token
+    Linear,
+    /// Set your Sentry auth token
+    Sentry,
 }
