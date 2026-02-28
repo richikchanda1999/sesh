@@ -88,12 +88,12 @@ fn is_linear_id(input: &str) -> bool {
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
-struct LinearGraphqlResponse {
-    data: Option<LinearData>,
+struct LinearIssueResponse {
+    data: Option<LinearIssueData>,
 }
 
 #[derive(Deserialize)]
-struct LinearData {
+struct LinearIssueData {
     issue: Option<LinearIssue>,
 }
 
@@ -101,6 +101,66 @@ struct LinearData {
 struct LinearIssue {
     title: String,
     identifier: String,
+    #[serde(default)]
+    state: Option<LinearState>,
+    #[serde(default)]
+    labels: Option<LinearLabelConnection>,
+}
+
+#[derive(Deserialize)]
+struct LinearState {
+    name: String,
+    #[serde(rename = "type")]
+    state_type: String,
+    #[serde(default)]
+    color: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct LinearLabelConnection {
+    nodes: Vec<LinearLabel>,
+}
+
+#[derive(Deserialize)]
+struct LinearLabel {
+    name: String,
+    #[serde(default)]
+    color: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct LinearViewerResponse {
+    data: Option<LinearViewerData>,
+}
+
+#[derive(Deserialize)]
+struct LinearViewerData {
+    viewer: Option<LinearViewer>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LinearViewer {
+    assigned_issues: Option<LinearIssueConnection>,
+}
+
+#[derive(Deserialize)]
+struct LinearIssueConnection {
+    nodes: Vec<LinearIssue>,
+}
+
+pub struct LinearIssueSummary {
+    pub identifier: String,
+    pub title: String,
+    pub state_name: String,
+    pub state_type: String,
+    pub state_color: Option<String>,
+    pub labels: Vec<LinearLabelSummary>,
+}
+
+pub struct LinearLabelSummary {
+    pub name: String,
+    pub color: Option<String>,
 }
 
 async fn branch_from_linear(id: &str, parent_dir: &Path) -> Result<String> {
@@ -125,7 +185,7 @@ async fn branch_from_linear(id: &str, parent_dir: &Path) -> Result<String> {
         bail!("Linear API returned status {}", resp.status());
     }
 
-    let body: LinearGraphqlResponse = resp.json().await.context("failed to parse Linear response")?;
+    let body: LinearIssueResponse = resp.json().await.context("failed to parse Linear response")?;
 
     let issue = body
         .data
@@ -167,9 +227,109 @@ async fn branch_from_sentry(org: &str, issue_id: &str, parent_dir: &Path) -> Res
     Ok(truncate(&branch, 60))
 }
 
+/// Fetch the authenticated user's assigned Linear issues (active states only).
+pub async fn list_linear_issues(parent_dir: &Path) -> Result<Vec<LinearIssueSummary>> {
+    let token = load_token(parent_dir, "linear_token")?;
+    let client = Client::new();
+
+    let graphql_query = r#"{ viewer { assignedIssues(filter: { state: { type: { in: ["started", "unstarted", "backlog"] } } }, first: 50, orderBy: updatedAt) { nodes { identifier title state { name type color } labels { nodes { name color } } } } } }"#;
+
+    let body = serde_json::json!({ "query": graphql_query });
+
+    let resp = client
+        .post("https://api.linear.app/graphql")
+        .header("Authorization", &token)
+        .json(&body)
+        .send()
+        .await
+        .context("failed to call Linear API")?;
+
+    if !resp.status().is_success() {
+        bail!("Linear API returned status {}", resp.status());
+    }
+
+    let body: LinearViewerResponse = resp.json().await.context("failed to parse Linear response")?;
+
+    let issues = body
+        .data
+        .and_then(|d| d.viewer)
+        .and_then(|v| v.assigned_issues)
+        .map(|c| c.nodes)
+        .unwrap_or_default();
+
+    let mut summaries: Vec<LinearIssueSummary> = issues
+        .into_iter()
+        .map(|i| {
+            let (state_name, state_type, state_color) = match i.state {
+                Some(s) => (s.name, s.state_type, s.color),
+                None => ("Unknown".to_string(), "unknown".to_string(), None),
+            };
+            let labels = i
+                .labels
+                .map(|l| {
+                    l.nodes
+                        .into_iter()
+                        .map(|n| LinearLabelSummary {
+                            name: n.name,
+                            color: n.color,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            LinearIssueSummary {
+                identifier: i.identifier,
+                title: i.title,
+                state_name,
+                state_type,
+                state_color,
+                labels,
+            }
+        })
+        .collect();
+
+    // Sort: started first, then unstarted, then backlog
+    summaries.sort_by_key(|i| state_sort_key(&i.state_type));
+
+    Ok(summaries)
+}
+
+/// Generate a branch name from a selected Linear issue.
+pub fn branch_name_from_linear_issue(issue: &LinearIssueSummary) -> String {
+    let branch = format!("{}-{}", issue.identifier.to_lowercase(), slugify(&issue.title));
+    truncate(&branch, 60)
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Render text with true color (24-bit) ANSI if a hex color is provided.
+pub fn color_text(text: &str, hex: Option<&str>) -> String {
+    match hex.and_then(parse_hex_color) {
+        Some((r, g, b)) => format!("\x1b[38;2;{};{};{}m{}\x1b[0m", r, g, b, text),
+        None => text.to_string(),
+    }
+}
+
+fn parse_hex_color(hex: &str) -> Option<(u8, u8, u8)> {
+    let hex = hex.strip_prefix('#').unwrap_or(hex);
+    if hex.len() != 6 {
+        return None;
+    }
+    let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+    let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+    let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+    Some((r, g, b))
+}
+
+fn state_sort_key(state_type: &str) -> u8 {
+    match state_type {
+        "started" => 0,
+        "unstarted" => 1,
+        "backlog" => 2,
+        _ => 3,
+    }
+}
 
 fn load_token(parent_dir: &Path, filename: &str) -> Result<String> {
     let path = parent_dir.join(".sesh/secrets").join(filename);
