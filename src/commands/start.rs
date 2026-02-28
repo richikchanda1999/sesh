@@ -8,6 +8,7 @@ use dialoguer::{Input, MultiSelect};
 use crate::config::SeshConfig;
 use crate::context;
 use crate::discovery;
+use crate::integrations;
 use crate::lock;
 use crate::mcp;
 use crate::scripts;
@@ -15,7 +16,7 @@ use crate::session::{self, SessionInfo, SessionRepo};
 use crate::vscode;
 use crate::worktree;
 
-pub fn run(
+pub async fn run(
     parent_dir: &Path,
     branch: Option<String>,
     all: bool,
@@ -51,22 +52,14 @@ pub fn run(
         bail!("no repos selected");
     }
 
-    // 4. Get branch name
-    let branch_name = match branch {
-        Some(b) => b,
-        None => prompt_branch_name()?,
-    };
-
-    worktree::validate_branch_name(&branch_name)
-        .with_context(|| format!("'{}' is not a valid git branch name", branch_name))?;
-
-    // Check if any existing session already uses this branch
-    if let Some(existing) = session::find_session_by_branch(parent_dir, &branch_name) {
-        bail!(
-            "session '{}' already uses branch '{}'. Use `sesh stop {}` first or choose a different branch.",
-            existing.name, branch_name, existing.name
-        );
-    }
+    // 4. Get branch name (resolves Linear/Sentry inputs, validates, checks for conflicts)
+    let branch_name = resolve_branch_name(
+        branch.as_deref(),
+        parent_dir,
+        &selected_repos,
+        &config,
+    )
+    .await?;
 
     // Sanitize branch name into a flat folder name
     let session_name = session::sanitize_session_name(&branch_name, parent_dir);
@@ -101,38 +94,10 @@ pub fn run(
             println!(" {}", style("done").green());
         }
 
-        // Check if branch already exists
-        if worktree::branch_exists(&repo.path, &branch_name)? {
-            println!(
-                "  {} Branch '{}' already exists in {}; will use existing branch",
-                style("!").yellow(),
-                branch_name,
-                repo.name
-            );
-            // Use existing branch: worktree add <path> <existing-branch>
-            let wt = worktree_path.to_string_lossy();
-            let output = std::process::Command::new("git")
-                .arg("-C")
-                .arg(&repo.path)
-                .args(["worktree", "add", &wt, &branch_name])
-                .output()
-                .context("failed to run git worktree add")?;
-
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                rollback_worktrees(&created_worktrees);
-                bail!(
-                    "failed to create worktree for '{}': {}",
-                    repo.name,
-                    stderr.trim()
-                );
-            }
-        } else {
-            // Create worktree with new branch
-            if let Err(e) = worktree::create_worktree(&repo.path, &worktree_path, &branch_name, &base_ref) {
-                rollback_worktrees(&created_worktrees);
-                return Err(e.context(format!("failed while setting up repo '{}'", repo.name)));
-            }
+        // Create worktree with new branch (branch guaranteed not to exist after resolve_branch_name)
+        if let Err(e) = worktree::create_worktree(&repo.path, &worktree_path, &branch_name, &base_ref) {
+            rollback_worktrees(&created_worktrees);
+            return Err(e.context(format!("failed while setting up repo '{}'", repo.name)));
         }
 
         created_worktrees.push((repo.path.clone(), worktree_path.clone()));
@@ -187,12 +152,12 @@ pub fn run(
         }
     }
 
-    // 7. Write .mcp.json per worktree
+    // 7. Write .mcp.json per worktree (excluded from git via .git/info/exclude)
     let servers = &config.mcp.servers;
     if !servers.is_empty() {
         for repo in &selected_repos {
             let worktree_path = sess_dir.join(&repo.name);
-            mcp::write_mcp_config(&worktree_path, servers)
+            mcp::write_mcp_config(&worktree_path, &repo.path, servers)
                 .with_context(|| format!("failed to write .mcp.json for {}", repo.name))?;
         }
         println!("  {} MCP config written ({} server(s))", style("✓").green(), servers.len());
@@ -431,6 +396,84 @@ fn prompt_branch_name() -> Result<String> {
         .context("branch name input cancelled")?;
 
     Ok(name.trim().to_string())
+}
+
+async fn resolve_branch_name(
+    flag_branch: Option<&str>,
+    parent_dir: &Path,
+    selected_repos: &[discovery::RepoInfo],
+    config: &SeshConfig,
+) -> Result<String> {
+    let is_interactive = flag_branch.is_none();
+
+    loop {
+        // 1. Get candidate
+        let candidate = match flag_branch {
+            Some(b) => b.to_string(),
+            None => prompt_branch_name()?,
+        };
+
+        // 2. Resolve Linear/Sentry → branch name
+        let branch_name = integrations::resolve_branch_input(&candidate, config, parent_dir).await?;
+
+        // 3. Validate git branch name
+        if let Err(e) = worktree::validate_branch_name(&branch_name) {
+            if is_interactive {
+                println!(
+                    "  {} '{}' is not a valid git branch name: {}",
+                    style("✗").red(),
+                    branch_name,
+                    e
+                );
+                continue;
+            }
+            bail!("'{}' is not a valid git branch name: {}", branch_name, e);
+        }
+
+        // 4. Check session-level duplicate
+        if let Some(existing) = session::find_session_by_branch(parent_dir, &branch_name) {
+            if is_interactive {
+                println!(
+                    "  {} Session '{}' already uses branch '{}'. Choose a different name.",
+                    style("✗").red(),
+                    existing.name,
+                    branch_name
+                );
+                continue;
+            }
+            bail!(
+                "session '{}' already uses branch '{}'. Use `sesh stop {}` first or choose a different branch.",
+                existing.name, branch_name, existing.name
+            );
+        }
+
+        // 5. Check branch existence in ALL selected repos
+        let mut conflicts = Vec::new();
+        for repo in selected_repos {
+            if worktree::branch_exists(&repo.path, &branch_name)? {
+                conflicts.push(repo.name.clone());
+            }
+        }
+
+        if !conflicts.is_empty() {
+            if is_interactive {
+                println!(
+                    "  {} Branch '{}' already exists in: {}. Choose a different name.",
+                    style("✗").red(),
+                    branch_name,
+                    conflicts.join(", ")
+                );
+                continue;
+            }
+            bail!(
+                "branch '{}' already exists in: {}",
+                branch_name,
+                conflicts.join(", ")
+            );
+        }
+
+        return Ok(branch_name);
+    }
 }
 
 fn rollback_worktrees(created: &[(PathBuf, PathBuf)]) {
