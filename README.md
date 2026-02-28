@@ -54,7 +54,7 @@ sesh stop                     # tear down a session
 
 | Command | Description |
 |---------|-------------|
-| `sesh start [-b branch] [--all] [--preset name]` | Create a new worktree session |
+| `sesh start [-b branch] [--all] [--preset name]` | Create a new worktree session (accepts Linear/Sentry inputs) |
 | `sesh list [--active]` | List sessions |
 | `sesh stop [name] [--keep-branches]` | Tear down session, clean up worktrees, and release locks |
 | `sesh resume [name]` | Re-open VS Code for a session |
@@ -63,6 +63,8 @@ sesh stop                     # tear down a session
 | `sesh pr [name] [--base main]` | Push branches and create GitHub PRs |
 | `sesh init` | Generate `sesh.toml` interactively |
 | `sesh doctor` | Detect and fix orphaned worktrees, sessions, and stale locks |
+| `sesh auth linear` | Save your Linear API token |
+| `sesh auth sentry` | Save your Sentry auth token |
 
 All commands accept `-d <DIR>` to specify the parent directory (defaults to cwd).
 
@@ -198,6 +200,37 @@ Repos with `exclusive = true` use a file-based lock so only one session runs the
 - **`sesh stop`** — releases locks held by the session being stopped.
 - **`sesh activate [name]`** — transfers locks to a different session, running teardown for the previous holder and setup for the new one. Useful for switching which session is "live" without recreating worktrees.
 - **`sesh doctor`** — detects and cleans up stale locks.
+
+## Linear & Sentry Integration
+
+`sesh start` auto-detects if your branch input is a Linear ticket or Sentry issue, fetches the title via API, and generates a branch name from it.
+
+### Setup
+
+```bash
+sesh auth linear   # paste your Linear API key (Settings → API → Personal API keys)
+sesh auth sentry   # paste your Sentry auth token (Settings → Auth Tokens)
+```
+
+Tokens are stored in `.sesh/secrets/` (inside the parent directory, outside any repo). For Sentry, you can also set the default org in `sesh.toml`:
+
+```toml
+[sentry]
+org = "your-org-slug"
+```
+
+### Supported inputs
+
+| Input | Example | Generated branch |
+|-------|---------|-----------------|
+| Linear URL | `https://linear.app/team/issue/ENG-123/fix-login` | `eng-123-fix-login-bug` |
+| Linear ID | `ENG-123` | `eng-123-fix-login-bug` |
+| Sentry URL | `https://myorg.sentry.io/issues/12345/` | `sentry-12345-null-pointer-in-handler` |
+| Plain text | `feature/auth` | `feature/auth` (unchanged) |
+
+Branch names are slugified (lowercased, non-alphanumeric → hyphens, collapsed, max 60 chars).
+
+**Note:** If a branch already exists in any selected repo, `sesh start` will reject it and re-prompt (interactive) or error (with `-b` flag).
 
 ## Prerequisites
 
