@@ -414,9 +414,15 @@ async fn resolve_branch_name(
         };
 
         // 2. Resolve Linear/Sentry → branch name
-        let branch_name = integrations::resolve_branch_input(&candidate, config, parent_dir).await?;
+        let resolved = integrations::resolve_branch_input(&candidate, config, parent_dir).await?;
 
-        // 3. Validate git branch name
+        // 3. Apply branch prefix
+        let branch_name = match &config.session.branch_prefix {
+            Some(prefix) if !resolved.starts_with(prefix) => format!("{}{}", prefix, resolved),
+            _ => resolved,
+        };
+
+        // 4. Validate git branch name
         if let Err(e) = worktree::validate_branch_name(&branch_name) {
             if is_interactive {
                 println!(
@@ -430,7 +436,7 @@ async fn resolve_branch_name(
             bail!("'{}' is not a valid git branch name: {}", branch_name, e);
         }
 
-        // 4. Check session-level duplicate
+        // 5. Check session-level duplicate
         if let Some(existing) = session::find_session_by_branch(parent_dir, &branch_name) {
             if is_interactive {
                 println!(
@@ -447,7 +453,7 @@ async fn resolve_branch_name(
             );
         }
 
-        // 5. Check branch existence in ALL selected repos
+        // 6. Check branch existence in ALL selected repos
         let mut conflicts = Vec::new();
         for repo in selected_repos {
             if worktree::branch_exists(&repo.path, &branch_name)? {

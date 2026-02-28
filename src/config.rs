@@ -24,6 +24,7 @@ pub struct SentryConfig {
 #[serde(default)]
 pub struct SessionConfig {
     pub base_branch: String,
+    pub branch_prefix: Option<String>,
     pub shared_context: Vec<String>,
     pub copy: Vec<String>,
 }
@@ -32,6 +33,7 @@ impl Default for SessionConfig {
     fn default() -> Self {
         Self {
             base_branch: "main".to_string(),
+            branch_prefix: None,
             shared_context: Vec::new(),
             copy: Vec::new(),
         }
