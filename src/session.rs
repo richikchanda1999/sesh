@@ -5,6 +5,17 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct IssueContext {
+    pub provider: String,
+    pub identifier: String,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionInfo {
     pub name: String,
@@ -12,6 +23,10 @@ pub struct SessionInfo {
     pub repos: Vec<SessionRepo>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub parent_dir: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issue: Option<IssueContext>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_branch: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

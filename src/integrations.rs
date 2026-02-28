@@ -5,17 +5,23 @@ use reqwest::Client;
 use serde::Deserialize;
 
 use crate::config::SeshConfig;
+use crate::session::IssueContext;
 
 // ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
+
+pub struct BranchResolution {
+    pub branch: String,
+    pub issue: Option<IssueContext>,
+}
 
 /// Resolve user input that may be a Linear ticket, Sentry URL, or plain branch name.
 pub async fn resolve_branch_input(
     input: &str,
     config: &SeshConfig,
     parent_dir: &Path,
-) -> Result<String> {
+) -> Result<BranchResolution> {
     let input = input.trim();
 
     // Linear URL: https://linear.app/{workspace}/issue/{TEAM-123}/...
@@ -35,7 +41,10 @@ pub async fn resolve_branch_input(
     }
 
     // Plain text — return as-is
-    Ok(input.to_string())
+    Ok(BranchResolution {
+        branch: input.to_string(),
+        issue: None,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -163,12 +172,12 @@ pub struct LinearLabelSummary {
     pub color: Option<String>,
 }
 
-async fn branch_from_linear(id: &str, parent_dir: &Path) -> Result<String> {
+async fn branch_from_linear(id: &str, parent_dir: &Path) -> Result<BranchResolution> {
     let token = load_token(parent_dir, "linear_token")?;
     let client = Client::new();
 
     let query = format!(
-        r#"{{"query":"{{ issue(id: \"{}\") {{ title identifier }} }}"}}"#,
+        r#"{{"query":"{{ issue(id: \"{}\") {{ title identifier state {{ name type }} labels {{ nodes {{ name }} }} }} }}"}}"#,
         id
     );
 
@@ -193,7 +202,22 @@ async fn branch_from_linear(id: &str, parent_dir: &Path) -> Result<String> {
         .with_context(|| format!("Linear issue '{}' not found", id))?;
 
     let branch = format!("{}-{}", issue.identifier.to_lowercase(), slugify(&issue.title));
-    Ok(truncate(&branch, 60))
+
+    let issue_ctx = IssueContext {
+        provider: "linear".to_string(),
+        identifier: issue.identifier,
+        title: issue.title,
+        state: issue.state.map(|s| s.name),
+        labels: issue
+            .labels
+            .map(|l| l.nodes.into_iter().map(|n| n.name).collect())
+            .unwrap_or_default(),
+    };
+
+    Ok(BranchResolution {
+        branch: truncate(&branch, 60),
+        issue: Some(issue_ctx),
+    })
 }
 
 #[derive(Deserialize)]
@@ -201,7 +225,7 @@ struct SentryIssue {
     title: String,
 }
 
-async fn branch_from_sentry(org: &str, issue_id: &str, parent_dir: &Path) -> Result<String> {
+async fn branch_from_sentry(org: &str, issue_id: &str, parent_dir: &Path) -> Result<BranchResolution> {
     let token = load_token(parent_dir, "sentry_token")?;
     let client = Client::new();
 
@@ -224,7 +248,19 @@ async fn branch_from_sentry(org: &str, issue_id: &str, parent_dir: &Path) -> Res
     let issue: SentryIssue = resp.json().await.context("failed to parse Sentry response")?;
 
     let branch = format!("sentry-{}-{}", issue_id, slugify(&issue.title));
-    Ok(truncate(&branch, 60))
+
+    let issue_ctx = IssueContext {
+        provider: "sentry".to_string(),
+        identifier: format!("sentry-{}", issue_id),
+        title: issue.title,
+        state: None,
+        labels: Vec::new(),
+    };
+
+    Ok(BranchResolution {
+        branch: truncate(&branch, 60),
+        issue: Some(issue_ctx),
+    })
 }
 
 /// Fetch the authenticated user's assigned Linear issues (active states only).
@@ -297,6 +333,17 @@ pub async fn list_linear_issues(parent_dir: &Path) -> Result<Vec<LinearIssueSumm
 pub fn branch_name_from_linear_issue(issue: &LinearIssueSummary) -> String {
     let branch = format!("{}-{}", issue.identifier.to_lowercase(), slugify(&issue.title));
     truncate(&branch, 60)
+}
+
+/// Build an IssueContext from a LinearIssueSummary (used by the --linear picker path).
+pub fn issue_context_from_linear_summary(summary: &LinearIssueSummary) -> IssueContext {
+    IssueContext {
+        provider: "linear".to_string(),
+        identifier: summary.identifier.clone(),
+        title: summary.title.clone(),
+        state: Some(summary.state_name.clone()),
+        labels: summary.labels.iter().map(|l| l.name.clone()).collect(),
+    }
 }
 
 // ---------------------------------------------------------------------------

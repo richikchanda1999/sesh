@@ -12,7 +12,7 @@ use crate::integrations;
 use crate::lock;
 use crate::mcp;
 use crate::scripts;
-use crate::session::{self, BackgroundPid, SessionInfo, SessionRepo};
+use crate::session::{self, BackgroundPid, IssueContext, SessionInfo, SessionRepo};
 use crate::vscode;
 use crate::worktree;
 
@@ -55,7 +55,7 @@ pub async fn run(
     }
 
     // 4. Get branch name (resolves Linear/Sentry inputs, validates, checks for conflicts)
-    let branch_name = resolve_branch_name(
+    let (branch_name, issue_context) = resolve_branch_name(
         branch.as_deref(),
         parent_dir,
         &selected_repos,
@@ -63,6 +63,8 @@ pub async fn run(
         linear,
     )
     .await?;
+
+    let effective_base = from.as_deref().unwrap_or(&config.session.base_branch);
 
     // Sanitize branch name into a flat folder name
     let session_name = session::sanitize_session_name(&branch_name, parent_dir);
@@ -121,6 +123,8 @@ pub async fn run(
             .collect(),
         created_at: Utc::now(),
         parent_dir: parent_dir.to_path_buf(),
+        issue: issue_context,
+        base_branch: Some(effective_base.to_string()),
     };
 
     session::save_session(&sess_dir, &session_info)?;
@@ -196,6 +200,8 @@ pub async fn run(
         &repo_pairs,
         &config.session.shared_context,
         parent_dir,
+        session_info.issue.as_ref(),
+        Some(effective_base),
     )?;
     println!("  {} Session context generated", style("✓").green());
 
@@ -496,7 +502,7 @@ async fn resolve_branch_name(
     selected_repos: &[discovery::RepoInfo],
     config: &SeshConfig,
     linear: bool,
-) -> Result<String> {
+) -> Result<(String, Option<IssueContext>)> {
     let is_interactive = flag_branch.is_none() && !linear;
 
     // --linear: pick from assigned tickets (re-prompt on conflict)
@@ -508,7 +514,7 @@ async fn resolve_branch_name(
         }
 
         loop {
-            let candidate = pick_linear_ticket(&issues)?;
+            let (candidate, issue_ctx) = pick_linear_ticket(&issues)?;
             let resolved = apply_prefix(config, &candidate);
 
             if let Err(e) = worktree::validate_branch_name(&resolved) {
@@ -538,7 +544,7 @@ async fn resolve_branch_name(
                 );
                 continue;
             }
-            return Ok(resolved);
+            return Ok((resolved, Some(issue_ctx)));
         }
     }
 
@@ -549,11 +555,11 @@ async fn resolve_branch_name(
             None => prompt_branch_name()?,
         };
 
-        // 2. Resolve Linear/Sentry → branch name
-        let resolved = integrations::resolve_branch_input(&candidate, config, parent_dir).await?;
+        // 2. Resolve Linear/Sentry → branch name + optional issue context
+        let resolution = integrations::resolve_branch_input(&candidate, config, parent_dir).await?;
 
         // 3. Apply branch prefix
-        let branch_name = apply_prefix(config, &resolved);
+        let branch_name = apply_prefix(config, &resolution.branch);
 
         // 4. Validate git branch name
         if let Err(e) = worktree::validate_branch_name(&branch_name) {
@@ -611,11 +617,11 @@ async fn resolve_branch_name(
             );
         }
 
-        return Ok(branch_name);
+        return Ok((branch_name, resolution.issue));
     }
 }
 
-fn pick_linear_ticket(issues: &[integrations::LinearIssueSummary]) -> Result<String> {
+fn pick_linear_ticket(issues: &[integrations::LinearIssueSummary]) -> Result<(String, IssueContext)> {
     let labels: Vec<String> = issues
         .iter()
         .map(|i| {
@@ -642,7 +648,9 @@ fn pick_linear_ticket(issues: &[integrations::LinearIssueSummary]) -> Result<Str
         .interact()
         .context("ticket selection cancelled")?;
 
-    Ok(integrations::branch_name_from_linear_issue(&issues[selection]))
+    let branch = integrations::branch_name_from_linear_issue(&issues[selection]);
+    let issue_ctx = integrations::issue_context_from_linear_summary(&issues[selection]);
+    Ok((branch, issue_ctx))
 }
 
 fn apply_prefix(config: &SeshConfig, branch: &str) -> String {
