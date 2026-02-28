@@ -131,3 +131,30 @@ pub fn find_session_by_branch(parent_dir: &Path, branch: &str) -> Option<Session
     let sessions = list_sessions(parent_dir).ok()?;
     sessions.into_iter().find(|s| s.branch == branch)
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackgroundPid {
+    pub pid: u32,
+    pub label: String,
+    pub script: String,
+}
+
+pub fn save_background_pids(session_dir: &Path, pids: &[BackgroundPid]) -> anyhow::Result<()> {
+    let path = session_dir.join("background_pids.json");
+    let json = serde_json::to_string_pretty(pids).context("Failed to serialize background PIDs")?;
+    fs::write(&path, json)
+        .with_context(|| format!("Failed to write background PIDs: {}", path.display()))?;
+    Ok(())
+}
+
+pub fn load_background_pids(session_dir: &Path) -> Vec<BackgroundPid> {
+    let path = session_dir.join("background_pids.json");
+    if !path.exists() {
+        return Vec::new();
+    }
+    let contents = match fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+    serde_json::from_str(&contents).unwrap_or_default()
+}

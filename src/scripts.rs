@@ -1,34 +1,63 @@
+use std::fs::{self, File};
 use std::path::Path;
 use std::process::Command;
+use std::thread;
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 
-fn run_script(label: &str, script_path: &Path, session_dir: &Path, branch: &str, repo_names: &[String]) -> Result<()> {
+use crate::config::ScriptEntry;
+use crate::session::BackgroundPid;
+
+/// Build a Command with standard sesh env vars set.
+fn base_command(
+    script_path: &Path,
+    cwd: &Path,
+    session_name: &str,
+    branch: &str,
+    repo_names: &[String],
+) -> Command {
+    let repos_csv = repo_names.join(",");
+    let mut cmd = Command::new(script_path);
+    cmd.current_dir(cwd)
+        .env("SESH_SESSION", session_name)
+        .env("SESH_BRANCH", branch)
+        .env("SESH_REPOS", &repos_csv);
+    cmd
+}
+
+/// Run a script entry as a foreground process (blocking).
+pub fn run_script_entry(
+    label: &str,
+    entry: &ScriptEntry,
+    script_path: &Path,
+    cwd: &Path,
+    session_name: &str,
+    branch: &str,
+    repo_names: &[String],
+    extra_env: &[(&str, &str)],
+) -> Result<()> {
     if !script_path.exists() {
         bail!("{} script not found: {}", label, script_path.display());
     }
 
-    let repos_csv = repo_names.join(",");
-    let session_name = session_dir
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_default();
-
-    let status = Command::new(script_path)
-        .current_dir(session_dir)
-        .env("SESH_SESSION", &session_name)
-        .env("SESH_BRANCH", branch)
-        .env("SESH_REPOS", &repos_csv)
-        .stdin(std::process::Stdio::inherit())
+    let mut cmd = base_command(script_path, cwd, session_name, branch, repo_names);
+    for &(key, val) in extra_env {
+        cmd.env(key, val);
+    }
+    cmd.stdin(std::process::Stdio::inherit())
         .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit());
+
+    let status = cmd
         .status()
         .with_context(|| format!("failed to execute {} script: {}", label, script_path.display()))?;
 
     if !status.success() {
         bail!(
-            "{} script exited with status: {}",
+            "{} script '{}' exited with status: {}",
             label,
+            entry.path,
             status.code().map(|c| c.to_string()).unwrap_or_else(|| "signal".to_string())
         );
     }
@@ -36,94 +65,87 @@ fn run_script(label: &str, script_path: &Path, session_dir: &Path, branch: &str,
     Ok(())
 }
 
-pub fn run_setup_script(script_path: &Path, session_dir: &Path, branch: &str, repo_names: &[String]) -> Result<()> {
-    run_script("setup", script_path, session_dir, branch, repo_names)
-}
-
-pub fn run_setup_script_with_env(
+/// Spawn a script as a background process. Returns the PID.
+/// stdout/stderr are redirected to `<log_dir>/<label>.log`.
+pub fn spawn_background_script(
+    entry: &ScriptEntry,
     script_path: &Path,
-    session_dir: &Path,
-    branch: &str,
-    repo_names: &[String],
-    exclusive_skipped: &[String],
-) -> Result<()> {
-    if !script_path.exists() {
-        bail!("setup script not found: {}", script_path.display());
-    }
-
-    let repos_csv = repo_names.join(",");
-    let session_name = session_dir
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_default();
-
-    let mut cmd = Command::new(script_path);
-    cmd.current_dir(session_dir)
-        .env("SESH_SESSION", &session_name)
-        .env("SESH_BRANCH", branch)
-        .env("SESH_REPOS", &repos_csv)
-        .stdin(std::process::Stdio::inherit())
-        .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit());
-
-    if !exclusive_skipped.is_empty() {
-        cmd.env("SESH_EXCLUSIVE_SKIP", exclusive_skipped.join(","));
-    }
-
-    let status = cmd.status()
-        .with_context(|| format!("failed to execute setup script: {}", script_path.display()))?;
-
-    if !status.success() {
-        bail!(
-            "setup script exited with status: {}",
-            status.code().map(|c| c.to_string()).unwrap_or_else(|| "signal".to_string())
-        );
-    }
-
-    Ok(())
-}
-
-pub fn run_teardown_script(script_path: &Path, session_dir: &Path, branch: &str, repo_names: &[String]) -> Result<()> {
-    run_script("teardown", script_path, session_dir, branch, repo_names)
-}
-
-/// Run a per-repo script with the worktree as cwd.
-/// Sets SESH_SESSION, SESH_BRANCH, SESH_REPOS, and SESH_REPO (current repo name).
-pub fn run_repo_script(
+    cwd: &Path,
+    log_dir: &Path,
     label: &str,
-    script_path: &Path,
-    worktree_dir: &Path,
     session_name: &str,
     branch: &str,
     repo_names: &[String],
-    repo_name: &str,
-) -> Result<()> {
+    extra_env: &[(&str, &str)],
+) -> Result<u32> {
     if !script_path.exists() {
-        bail!("{} script not found: {}", label, script_path.display());
+        bail!("background script not found: {}", script_path.display());
     }
 
-    let repos_csv = repo_names.join(",");
+    fs::create_dir_all(log_dir)
+        .with_context(|| format!("failed to create log dir: {}", log_dir.display()))?;
 
-    let status = Command::new(script_path)
-        .current_dir(worktree_dir)
-        .env("SESH_SESSION", session_name)
-        .env("SESH_BRANCH", branch)
-        .env("SESH_REPOS", &repos_csv)
-        .env("SESH_REPO", repo_name)
-        .stdin(std::process::Stdio::inherit())
-        .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit())
-        .status()
-        .with_context(|| format!("failed to execute {} script for {}: {}", label, repo_name, script_path.display()))?;
+    let log_path = log_dir.join(format!("{}.log", label));
+    let log_file = File::create(&log_path)
+        .with_context(|| format!("failed to create log file: {}", log_path.display()))?;
+    let log_stderr = log_file
+        .try_clone()
+        .context("failed to clone log file handle")?;
 
-    if !status.success() {
-        bail!(
-            "{} script for '{}' exited with status: {}",
-            label,
-            repo_name,
-            status.code().map(|c| c.to_string()).unwrap_or_else(|| "signal".to_string())
-        );
+    let mut cmd = base_command(script_path, cwd, session_name, branch, repo_names);
+    for &(key, val) in extra_env {
+        cmd.env(key, val);
+    }
+    cmd.stdin(std::process::Stdio::null())
+        .stdout(log_file)
+        .stderr(log_stderr);
+
+    let child = cmd
+        .spawn()
+        .with_context(|| format!("failed to spawn background script: {}", entry.path))?;
+
+    Ok(child.id())
+}
+
+/// Kill background processes: SIGTERM first, wait up to 5s, then SIGKILL stragglers.
+pub fn kill_background_pids(pids: &[BackgroundPid]) {
+    use std::process::Command as Cmd;
+
+    // Send SIGTERM to all
+    for bp in pids {
+        let _ = Cmd::new("kill")
+            .arg("-TERM")
+            .arg(bp.pid.to_string())
+            .output();
     }
 
-    Ok(())
+    // Wait up to 5 seconds for processes to exit
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let any_alive = pids.iter().any(|bp| is_process_alive(bp.pid));
+        if !any_alive || std::time::Instant::now() >= deadline {
+            break;
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+
+    // SIGKILL any survivors
+    for bp in pids {
+        if is_process_alive(bp.pid) {
+            let _ = Cmd::new("kill")
+                .arg("-KILL")
+                .arg(bp.pid.to_string())
+                .output();
+        }
+    }
+}
+
+fn is_process_alive(pid: u32) -> bool {
+    // kill -0 checks if process exists without sending a signal
+    Command::new("kill")
+        .arg("-0")
+        .arg(pid.to_string())
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }

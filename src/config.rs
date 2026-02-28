@@ -4,6 +4,13 @@ use std::path::Path;
 use anyhow::Context;
 use serde::Deserialize;
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct ScriptEntry {
+    pub path: String,
+    #[serde(default)]
+    pub background: bool,
+}
+
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(default)]
 pub struct SeshConfig {
@@ -43,8 +50,8 @@ impl Default for SessionConfig {
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(default)]
 pub struct ScriptsConfig {
-    pub setup: Option<String>,
-    pub teardown: Option<String>,
+    pub setup: Vec<ScriptEntry>,
+    pub teardown: Vec<ScriptEntry>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -69,8 +76,8 @@ pub struct RepoConfig {
     pub symlink: Vec<String>,
     pub skip: bool,
     pub exclusive: bool,
-    pub setup: Option<String>,
-    pub teardown: Option<String>,
+    pub setup: Vec<ScriptEntry>,
+    pub teardown: Vec<ScriptEntry>,
 }
 
 impl SeshConfig {

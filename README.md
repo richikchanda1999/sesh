@@ -124,9 +124,16 @@ branch_prefix = "richik/"           # auto-prefix all branch names (e.g. richik/
 shared_context = ["ARCHITECTURE.md"]
 copy = ["docker-compose.yml"]       # files from parent dir copied into session dir
 
-[scripts]
-setup = "./scripts/setup-dev.sh"
-teardown = "./scripts/teardown-dev.sh"
+# Scripts — each is an array of entries, run in order
+[[scripts.setup]]
+path = "./scripts/install-deps.sh"
+
+[[scripts.setup]]
+path = "./scripts/start-services.sh"
+background = true                    # runs in background, auto-killed on `sesh stop`
+
+[[scripts.teardown]]
+path = "./scripts/teardown-dev.sh"
 
 # MCP servers configured in every worktree
 [[mcp.servers]]
@@ -144,13 +151,23 @@ url = "https://mcp.linear.app/mcp"
 copy = [".env", "supabase/functions/.env"]
 symlink = []
 exclusive = true                 # only one session runs services for this repo
-setup = "./scripts/server-setup.sh"
-teardown = "./scripts/server-teardown.sh"
+
+[[repos.server.setup]]
+path = "./scripts/server-setup.sh"
+
+[[repos.server.setup]]
+path = "./scripts/server-dev.sh"
+background = true
+
+[[repos.server.teardown]]
+path = "./scripts/server-teardown.sh"
 
 [repos.web-code]
 copy = [".env"]
 symlink = ["node_modules"]
-setup = "./scripts/web-setup.sh"
+
+[[repos.web-code.setup]]
+path = "./scripts/web-setup.sh"
 
 [repos.admin]
 copy = [".env"]
@@ -171,15 +188,50 @@ all = ["server", "web-code", "admin"]
 | `symlink` | Files/directories to symlink (e.g., `node_modules` to avoid reinstalling) |
 | `skip` | Exclude from default selection in the interactive picker |
 | `exclusive` | Only one session can hold the lock for this repo at a time (see below) |
-| `setup` | Per-repo setup script, run with the worktree as working directory |
-| `teardown` | Per-repo teardown script, run before worktree removal |
+| `setup` | Array of setup script entries (see below) |
+| `teardown` | Array of teardown script entries (see below) |
 
 ### Scripts
 
-There are two levels of scripts:
+Scripts use an array-of-objects format. Each entry has a `path` and an optional `background` flag.
 
-- **Global** (`[scripts].setup` / `[scripts].teardown`) — run once per session, with the session directory as cwd.
-- **Per-repo** (`[repos.X].setup` / `[repos.X].teardown`) — run once per repo, with the worktree as cwd. Per-repo setup runs after the global setup; per-repo teardown runs before the global teardown.
+**Global scripts** — run once per session, with the session directory as cwd:
+
+```toml
+[[scripts.setup]]
+path = "./scripts/install-deps.sh"
+
+[[scripts.setup]]
+path = "./scripts/start-services.sh"
+background = true
+
+[[scripts.teardown]]
+path = "./scripts/teardown-dev.sh"
+```
+
+**Per-repo scripts** — run once per repo, with the worktree as cwd:
+
+```toml
+[repos.server]
+copy = [".env"]
+exclusive = true
+
+[[repos.server.setup]]
+path = "./scripts/server-setup.sh"
+
+[[repos.server.setup]]
+path = "./scripts/server-dev.sh"
+background = true
+
+[[repos.server.teardown]]
+path = "./scripts/server-teardown.sh"
+```
+
+Per-repo setup runs after global setup; per-repo teardown runs before global teardown.
+
+Scripts within each level run in the order they appear in the config file.
+
+**Background scripts** (`background = true`) are spawned as detached processes. Their stdout/stderr is redirected to `<session-dir>/logs/<label>.log`. Background PIDs are tracked and automatically killed (SIGTERM, then SIGKILL after 5s) when you run `sesh stop`.
 
 All scripts receive these environment variables:
 
@@ -191,7 +243,7 @@ All scripts receive these environment variables:
 | `SESH_REPO` | Current repo name (per-repo scripts only) |
 | `SESH_EXCLUSIVE_SKIP` | Comma-separated repos whose exclusive lock is held by another session (global setup only) |
 
-Scripts inherit the terminal for interactive prompts.
+Foreground scripts inherit the terminal for interactive prompts. Background scripts receive `/dev/null` as stdin.
 
 ### Exclusive Locks
 

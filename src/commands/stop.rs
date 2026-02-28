@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use console::style;
 
 use crate::config::SeshConfig;
@@ -15,6 +15,16 @@ pub fn run(parent_dir: &Path, name: Option<String>, keep_branches: bool) -> Resu
     let session = pick_session(parent_dir, name)?;
     let session_dir = session::session_dir(parent_dir, &session.name);
 
+    // Kill background processes
+    let bg_pids = session::load_background_pids(&session_dir);
+    if !bg_pids.is_empty() {
+        println!(
+            "Killing {} background process(es)...",
+            bg_pids.len()
+        );
+        scripts::kill_background_pids(&bg_pids);
+    }
+
     // Run teardown scripts
     let config_path = parent_dir.join("sesh.toml");
     let config = SeshConfig::load(&config_path)?;
@@ -23,33 +33,51 @@ pub fn run(parent_dir: &Path, name: Option<String>, keep_branches: bool) -> Resu
     // Per-repo teardown scripts (run before global teardown)
     for repo in &session.repos {
         if let Some(repo_config) = config.repos.get(&repo.name) {
-            if let Some(ref teardown) = repo_config.teardown {
-                let script_path = parent_dir.join(teardown);
+            for entry in &repo_config.teardown {
+                let script_path = parent_dir.join(&entry.path);
                 if script_path.exists() {
-                    println!("Running teardown for {}...", style(&repo.name).cyan());
-                    if let Err(e) = scripts::run_repo_script(
+                    println!(
+                        "Running teardown for {}: {}...",
+                        style(&repo.name).cyan(),
+                        entry.path
+                    );
+                    if let Err(e) = scripts::run_script_entry(
                         "teardown",
+                        entry,
                         &script_path,
                         &repo.worktree_path,
                         &session.name,
                         &session.branch,
                         &repo_names,
-                        &repo.name,
+                        &[("SESH_REPO", repo.name.as_str())],
                     ) {
-                        eprintln!("  Warning: teardown script for {} failed: {}", repo.name, e);
+                        eprintln!(
+                            "  Warning: teardown script '{}' for {} failed: {}",
+                            entry.path, repo.name, e
+                        );
                     }
                 }
             }
         }
     }
 
-    // Global teardown script
-    if let Some(ref teardown) = config.scripts.teardown {
-        let script_path = parent_dir.join(teardown);
+    // Global teardown scripts
+    for entry in &config.scripts.teardown {
+        let script_path = parent_dir.join(&entry.path);
         if script_path.exists() {
-            println!("Running teardown script...");
-            scripts::run_teardown_script(&script_path, &session_dir, &session.branch, &repo_names)
-                .context("Teardown script failed")?;
+            println!("Running teardown: {}...", entry.path);
+            if let Err(e) = scripts::run_script_entry(
+                "teardown",
+                entry,
+                &script_path,
+                &session_dir,
+                &session.name,
+                &session.branch,
+                &repo_names,
+                &[],
+            ) {
+                eprintln!("  Warning: teardown script '{}' failed: {}", entry.path, e);
+            }
         }
     }
 

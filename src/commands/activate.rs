@@ -79,30 +79,85 @@ pub fn run(parent_dir: &Path, name: Option<String>) -> Result<()> {
     teardown_sessions.sort();
     teardown_sessions.dedup();
 
-    if let Some(ref teardown) = config.scripts.teardown {
-        let script_path = parent_dir.join(teardown);
-        if script_path.exists() {
-            for old_session_name in &teardown_sessions {
-                if let Ok(old_session) = session::load_session(
-                    &session::session_dir(parent_dir, old_session_name),
-                ) {
-                    let old_dir = session::session_dir(parent_dir, old_session_name);
-                    let repo_names: Vec<String> =
-                        old_session.repos.iter().map(|r| r.name.clone()).collect();
+    for old_session_name in &teardown_sessions {
+        if let Ok(old_session) = session::load_session(
+            &session::session_dir(parent_dir, old_session_name),
+        ) {
+            let old_dir = session::session_dir(parent_dir, old_session_name);
+            let repo_names: Vec<String> =
+                old_session.repos.iter().map(|r| r.name.clone()).collect();
+
+            // Kill background processes for old session
+            let bg_pids = session::load_background_pids(&old_dir);
+            if !bg_pids.is_empty() {
+                println!(
+                    "\n  {} Killing {} background process(es) for '{}'...",
+                    style("→").cyan(),
+                    bg_pids.len(),
+                    old_session_name
+                );
+                scripts::kill_background_pids(&bg_pids);
+            }
+
+            // Per-repo teardown scripts for old session
+            for repo in &old_session.repos {
+                if let Some(repo_config) = config.repos.get(&repo.name) {
+                    for entry in &repo_config.teardown {
+                        let script_path = parent_dir.join(&entry.path);
+                        if script_path.exists() {
+                            println!(
+                                "  {} Running teardown for {}: {}...",
+                                style("→").cyan(),
+                                repo.name,
+                                entry.path
+                            );
+                            if let Err(e) = scripts::run_script_entry(
+                                "teardown",
+                                entry,
+                                &script_path,
+                                &repo.worktree_path,
+                                &old_session.name,
+                                &old_session.branch,
+                                &repo_names,
+                                &[("SESH_REPO", repo.name.as_str())],
+                            ) {
+                                eprintln!(
+                                    "  {} Teardown '{}' for {} failed: {}",
+                                    style("!").yellow(),
+                                    entry.path,
+                                    repo.name,
+                                    e
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Global teardown scripts for old session
+            for entry in &config.scripts.teardown {
+                let script_path = parent_dir.join(&entry.path);
+                if script_path.exists() {
                     println!(
-                        "\n  {} Running teardown for session '{}'...",
+                        "\n  {} Running teardown for session '{}': {}...",
                         style("→").cyan(),
-                        old_session_name
+                        old_session_name,
+                        entry.path
                     );
-                    if let Err(e) = scripts::run_teardown_script(
+                    if let Err(e) = scripts::run_script_entry(
+                        "teardown",
+                        entry,
                         &script_path,
                         &old_dir,
+                        &old_session.name,
                         &old_session.branch,
                         &repo_names,
+                        &[],
                     ) {
                         eprintln!(
-                            "  {} Teardown failed for '{}': {}",
+                            "  {} Teardown '{}' failed for '{}': {}",
                             style("!").yellow(),
+                            entry.path,
                             old_session_name,
                             e
                         );
@@ -113,22 +168,56 @@ pub fn run(parent_dir: &Path, name: Option<String>) -> Result<()> {
     }
 
     // Run setup for the target session
-    if let Some(ref setup) = config.scripts.setup {
-        let script_path = parent_dir.join(setup);
+    let repo_names: Vec<String> =
+        target_session.repos.iter().map(|r| r.name.clone()).collect();
+
+    // Global setup scripts
+    for entry in &config.scripts.setup {
+        let script_path = parent_dir.join(&entry.path);
         if script_path.exists() {
-            let repo_names: Vec<String> =
-                target_session.repos.iter().map(|r| r.name.clone()).collect();
             println!(
-                "\n  {} Running setup for session '{}'...",
+                "\n  {} Running setup for session '{}': {}...",
                 style("→").cyan(),
-                target_session.name
+                target_session.name,
+                entry.path
             );
-            scripts::run_setup_script(
+            scripts::run_script_entry(
+                "setup",
+                entry,
                 &script_path,
                 &target_dir,
+                &target_session.name,
                 &target_session.branch,
                 &repo_names,
+                &[],
             )?;
+        }
+    }
+
+    // Per-repo setup scripts
+    for repo in &target_session.repos {
+        if let Some(repo_config) = config.repos.get(&repo.name) {
+            for entry in &repo_config.setup {
+                let script_path = parent_dir.join(&entry.path);
+                if script_path.exists() {
+                    println!(
+                        "  {} Running setup for {}: {}...",
+                        style("→").cyan(),
+                        repo.name,
+                        entry.path
+                    );
+                    scripts::run_script_entry(
+                        "setup",
+                        entry,
+                        &script_path,
+                        &repo.worktree_path,
+                        &target_session.name,
+                        &target_session.branch,
+                        &repo_names,
+                        &[("SESH_REPO", repo.name.as_str())],
+                    )?;
+                }
+            }
         }
     }
 

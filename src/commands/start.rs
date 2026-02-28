@@ -12,7 +12,7 @@ use crate::integrations;
 use crate::lock;
 use crate::mcp;
 use crate::scripts;
-use crate::session::{self, SessionInfo, SessionRepo};
+use crate::session::{self, BackgroundPid, SessionInfo, SessionRepo};
 use crate::vscode;
 use crate::worktree;
 
@@ -276,38 +276,127 @@ pub async fn run(
     // 11. Run setup scripts
     if !no_setup {
         let repo_names: Vec<String> = selected_repos.iter().map(|r| r.name.clone()).collect();
+        let mut bg_pids: Vec<BackgroundPid> = Vec::new();
+        let log_dir = sess_dir.join("logs");
 
-        // Global setup script
-        if let Some(ref setup_script) = config.scripts.setup {
-            let script_path = parent_dir.join(setup_script);
-            println!("\n  {} Running setup script...", style("→").cyan());
-            scripts::run_setup_script_with_env(
-                &script_path,
-                &sess_dir,
-                &branch_name,
-                &repo_names,
-                &exclusive_skipped,
-            )?;
+        let exclusive_skip_csv = exclusive_skipped.join(",");
+
+        // Global setup scripts
+        for entry in &config.scripts.setup {
+            let script_path = parent_dir.join(&entry.path);
+            let extra_env: Vec<(&str, &str)> = if !exclusive_skipped.is_empty() {
+                vec![("SESH_EXCLUSIVE_SKIP", exclusive_skip_csv.as_str())]
+            } else {
+                vec![]
+            };
+
+            if entry.background {
+                let label = format!("global-setup-{}", sanitize_label(&entry.path));
+                println!("  {} Spawning background: {}...", style("→").cyan(), entry.path);
+                let pid = scripts::spawn_background_script(
+                    entry,
+                    &script_path,
+                    &sess_dir,
+                    &log_dir,
+                    &label,
+                    &session_name,
+                    &branch_name,
+                    &repo_names,
+                    &extra_env,
+                )?;
+                bg_pids.push(BackgroundPid {
+                    pid,
+                    label: label.clone(),
+                    script: entry.path.clone(),
+                });
+                println!("  {} Background PID {} ({})", style("✓").green(), pid, entry.path);
+            } else {
+                println!("\n  {} Running setup: {}...", style("→").cyan(), entry.path);
+                scripts::run_script_entry(
+                    "setup",
+                    entry,
+                    &script_path,
+                    &sess_dir,
+                    &session_name,
+                    &branch_name,
+                    &repo_names,
+                    &extra_env,
+                )?;
+            }
         }
 
         // Per-repo setup scripts
         for repo in &selected_repos {
             if let Some(repo_config) = config.repos.get(&repo.name) {
-                if let Some(ref setup) = repo_config.setup {
-                    let script_path = parent_dir.join(setup);
-                    let worktree_path = sess_dir.join(&repo.name);
-                    println!("  {} Running setup for {}...", style("→").cyan(), repo.name);
-                    scripts::run_repo_script(
-                        "setup",
-                        &script_path,
-                        &worktree_path,
-                        &session_name,
-                        &branch_name,
-                        &repo_names,
-                        &repo.name,
-                    )?;
+                let worktree_path = sess_dir.join(&repo.name);
+                let repo_env_name = repo.name.clone();
+
+                for entry in &repo_config.setup {
+                    let script_path = parent_dir.join(&entry.path);
+                    let extra_env: Vec<(&str, &str)> =
+                        vec![("SESH_REPO", repo_env_name.as_str())];
+
+                    if entry.background {
+                        let label = format!("{}-setup-{}", repo.name, sanitize_label(&entry.path));
+                        println!(
+                            "  {} Spawning background for {}: {}...",
+                            style("→").cyan(),
+                            repo.name,
+                            entry.path
+                        );
+                        let pid = scripts::spawn_background_script(
+                            entry,
+                            &script_path,
+                            &worktree_path,
+                            &log_dir,
+                            &label,
+                            &session_name,
+                            &branch_name,
+                            &repo_names,
+                            &extra_env,
+                        )?;
+                        bg_pids.push(BackgroundPid {
+                            pid,
+                            label: label.clone(),
+                            script: entry.path.clone(),
+                        });
+                        println!(
+                            "  {} Background PID {} ({}/{})",
+                            style("✓").green(),
+                            pid,
+                            repo.name,
+                            entry.path
+                        );
+                    } else {
+                        println!(
+                            "  {} Running setup for {}: {}...",
+                            style("→").cyan(),
+                            repo.name,
+                            entry.path
+                        );
+                        scripts::run_script_entry(
+                            "setup",
+                            entry,
+                            &script_path,
+                            &worktree_path,
+                            &session_name,
+                            &branch_name,
+                            &repo_names,
+                            &extra_env,
+                        )?;
+                    }
                 }
             }
+        }
+
+        // Save background PIDs
+        if !bg_pids.is_empty() {
+            session::save_background_pids(&sess_dir, &bg_pids)?;
+            println!(
+                "  {} {} background process(es) started",
+                style("✓").green(),
+                bg_pids.len()
+            );
         }
     }
 
@@ -569,6 +658,15 @@ fn rollback_worktrees(created: &[(PathBuf, PathBuf)]) {
             eprintln!("    Failed to remove worktree {}: {}", worktree_path.display(), e);
         }
     }
+}
+
+/// Turn a script path like "./scripts/start-services.sh" into a safe label fragment.
+fn sanitize_label(path: &str) -> String {
+    path.replace('/', "-")
+        .replace('\\', "-")
+        .trim_start_matches(['.', '-'])
+        .trim_end_matches(".sh")
+        .to_string()
 }
 
 fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
