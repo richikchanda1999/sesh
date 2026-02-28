@@ -18,6 +18,8 @@ toml = "0.9.8"
 chrono = { version = "0.4", features = ["serde"] }
 anyhow = "1"
 thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+reqwest = { version = "0.12", features = ["rustls-tls", "json"], default-features = false }
 
 # The profile that 'dist' will build with
 [profile.dist]
