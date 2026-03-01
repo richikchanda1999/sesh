@@ -127,6 +127,33 @@ pub enum Command {
         command: String,
     },
 
+    /// Check out an existing branch or PR into a new session
+    Checkout {
+        /// Pick from local+remote branches
+        #[arg(long, conflicts_with = "pr")]
+        branch: bool,
+
+        /// Pick from open GitHub PRs
+        #[arg(long, conflicts_with = "branch")]
+        pr: bool,
+
+        /// Include all discovered repos (skip interactive selection)
+        #[arg(long)]
+        all: bool,
+
+        /// Use a preset from sesh.toml
+        #[arg(long)]
+        preset: Option<String>,
+
+        /// Skip running setup scripts
+        #[arg(long)]
+        no_setup: bool,
+
+        /// Don't open VS Code
+        #[arg(long)]
+        no_vscode: bool,
+    },
+
     /// Generate shell completions
     Completions {
         /// Shell to generate completions for

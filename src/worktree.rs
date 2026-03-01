@@ -94,6 +94,80 @@ pub fn get_worktree_list(repo_path: &Path) -> Result<Vec<String>> {
     Ok(paths)
 }
 
+pub fn checkout_existing_branch(
+    repo_path: &Path,
+    worktree_path: &Path,
+    branch_name: &str,
+) -> Result<()> {
+    let wt = worktree_path.to_string_lossy();
+    let result = run_git(repo_path, &["worktree", "add", &wt, branch_name]);
+
+    if let Err(e) = result {
+        let repo_name = repo_path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| repo_path.display().to_string());
+        bail!(
+            "failed to create worktree for repo '{}': {}",
+            repo_name,
+            e
+        );
+    }
+
+    Ok(())
+}
+
+pub fn list_all_branches(repo_path: &Path) -> Result<Vec<String>> {
+    let output = run_git(
+        repo_path,
+        &["branch", "-a", "--format=%(refname:short)"],
+    )?;
+
+    let mut seen = std::collections::BTreeSet::new();
+    for line in output.lines() {
+        let branch = line.trim();
+        if branch.is_empty() || branch == "HEAD" || branch.ends_with("/HEAD") {
+            continue;
+        }
+        let stripped = branch
+            .strip_prefix("origin/")
+            .unwrap_or(branch);
+        seen.insert(stripped.to_string());
+    }
+
+    Ok(seen.into_iter().collect())
+}
+
+pub fn is_branch_on_worktree(repo_path: &Path, branch_name: &str) -> Result<bool> {
+    let output = run_git(repo_path, &["worktree", "list", "--porcelain"])?;
+    let target = format!("branch refs/heads/{}", branch_name);
+
+    for line in output.lines() {
+        if line.trim() == target {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
+pub fn remote_branch_exists(repo_path: &Path, branch_name: &str) -> Result<bool> {
+    let ref_name = format!("refs/remotes/origin/{}", branch_name);
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo_path)
+        .args(["rev-parse", "--verify", &ref_name])
+        .output()
+        .with_context(|| {
+            format!(
+                "failed to run git rev-parse for remote branch '{}'",
+                branch_name
+            )
+        })?;
+
+    Ok(output.status.success())
+}
+
 pub fn validate_branch_name(name: &str) -> Result<()> {
     let output = Command::new("git")
         .args(["check-ref-format", "--branch", name])

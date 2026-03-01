@@ -32,6 +32,9 @@ async fn main() -> Result<()> {
         Command::Resume { name } => commands::resume::run(&parent_dir, name),
         Command::Status { name } => commands::status::run(&parent_dir, name),
         Command::Pr { name, base } => commands::pr::run(&parent_dir, name, base),
+        Command::Checkout { branch, pr, all, preset, no_setup, no_vscode } => {
+            commands::checkout::run(&parent_dir, branch, pr, all, preset, no_setup, no_vscode).await
+        }
         Command::Init => commands::init::run(&parent_dir),
         Command::Doctor => commands::doctor::run(&parent_dir),
         Command::Activate { name } => commands::activate::run(&parent_dir, name),
